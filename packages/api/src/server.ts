@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { bodyLimit } from "hono/body-limit";
 import { logger } from "hono/logger";
 import { eq } from "drizzle-orm";
 import { db } from "./db/client.js";
@@ -19,11 +20,14 @@ app.use("*", logger());
 app.use(
   "/api/*",
   cors({
-    origin: process.env.APP_URL ?? "http://localhost:3847",
+    origin: process.env.APP_URL || "http://localhost:3847",
     allowMethods: ["GET", "POST", "PUT", "DELETE"],
     allowHeaders: ["Authorization", "Content-Type"],
   }),
 );
+
+// Body size limit: 5MB max for API routes
+app.use("/api/*", bodyLimit({ maxSize: 5 * 1024 * 1024 })); // 5MB max
 
 // Rate limiting: 100 requests per minute per IP for API routes
 app.use("/api/*", rateLimit({ max: 100, windowMs: 60_000 }));
@@ -105,6 +109,13 @@ import { serve } from "@hono/node-server";
 const PORT = parseInt(process.env.PORT ?? "3456");
 
 async function start() {
+  const requiredEnvVars = ["CLERK_SECRET_KEY", "TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN"];
+  for (const envVar of requiredEnvVars) {
+    if (!process.env[envVar]) {
+      console.warn(`WARNING: ${envVar} is not set`);
+    }
+  }
+
   await runMigrations();
   serve({ fetch: app.fetch, port: PORT }, () => {
     console.log(`VibeCheck API running at http://localhost:${PORT}`);

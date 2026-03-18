@@ -66,8 +66,9 @@ program
     if (url) {
       console.log(chalk.green(`\nOpen this URL to upgrade:`));
       console.log(chalk.bold.underline(url));
-      const { exec } = require("node:child_process");
-      exec(`open "${url}" 2>/dev/null || xdg-open "${url}" 2>/dev/null`);
+      const { execFile } = require("node:child_process");
+      const openCmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
+      execFile(openCmd, [url], () => {});
     } else {
       console.log(chalk.red("Failed to create checkout session. Please try again."));
     }

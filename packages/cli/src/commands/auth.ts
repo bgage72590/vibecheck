@@ -1,5 +1,7 @@
 import { createServer } from "node:http";
 import { URL } from "node:url";
+import { randomUUID } from "node:crypto";
+import { execFile } from "node:child_process";
 import chalk from "chalk";
 import ora from "ora";
 import { storeToken, clearToken, getStoredToken, syncUser } from "../utils/api.js";
@@ -82,6 +84,8 @@ async function waitForBrowserLogin(): Promise<{
   userId: string;
 }> {
   return new Promise((resolve, reject) => {
+    const expectedState = randomUUID();
+
     const server = createServer((req, res) => {
       if (!req.url) {
         res.writeHead(400);
@@ -95,6 +99,13 @@ async function waitForBrowserLogin(): Promise<{
         const token = url.searchParams.get("token");
         const email = url.searchParams.get("email");
         const userId = url.searchParams.get("user_id");
+        const state = url.searchParams.get("state");
+
+        if (!state || state !== expectedState) {
+          res.writeHead(403);
+          res.end("Invalid state parameter — possible CSRF attack.");
+          return;
+        }
 
         if (token && email && userId) {
           res.writeHead(200, { "Content-Type": "text/html" });
@@ -119,30 +130,45 @@ async function waitForBrowserLogin(): Promise<{
       } else if (url.pathname === "/login") {
         // Serve a simple login page that redirects to Clerk
         const callbackUrl = `http://localhost:${(server.address() as { port: number }).port}/callback`;
-        res.writeHead(200, { "Content-Type": "text/html" });
-        res.end(`
-          <html>
-            <body style="font-family: system-ui; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #0a0a0f; color: #e0e0e0;">
-              <div style="text-align: center;">
-                <h1 style="color: #00d4ff;">vibecheck</h1>
-                <p>Redirecting to login...</p>
-                <p style="color: #888; font-size: 0.85rem;">If not redirected, <a href="#" style="color: #00d4ff;">click here</a>.</p>
-                <script>
-                  // In production, this would redirect to Clerk's hosted sign-in page
-                  // For development, simulate a successful login
-                  const params = new URLSearchParams({
-                    token: 'dev_token_' + Date.now(),
-                    email: 'dev@vibecheck.dev',
-                    user_id: 'user_dev_' + Date.now()
-                  });
-                  setTimeout(() => {
-                    window.location.href = '/callback?' + params.toString();
-                  }, 1000);
-                </script>
-              </div>
-            </body>
-          </html>
-        `);
+
+        // Development-only bypass — requires both env vars to be explicitly set
+        if (process.env.NODE_ENV === "development" && process.env.VIBECHECK_DEV_AUTH === "true") {
+          res.writeHead(200, { "Content-Type": "text/html" });
+          res.end(`
+            <html>
+              <body style="font-family: system-ui; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #0a0a0f; color: #e0e0e0;">
+                <div style="text-align: center;">
+                  <h1 style="color: #00d4ff;">vibecheck</h1>
+                  <p>Redirecting to login (dev mode)...</p>
+                  <script>
+                    const params = new URLSearchParams({
+                      token: 'dev_token_' + Date.now(),
+                      email: 'dev@vibecheck.dev',
+                      user_id: 'user_dev_' + Date.now(),
+                      state: '${expectedState}'
+                    });
+                    setTimeout(() => {
+                      window.location.href = '/callback?' + params.toString();
+                    }, 1000);
+                  </script>
+                </div>
+              </body>
+            </html>
+          `);
+        } else {
+          res.writeHead(200, { "Content-Type": "text/html" });
+          res.end(`
+            <html>
+              <body style="font-family: system-ui; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: #0a0a0f; color: #e0e0e0;">
+                <div style="text-align: center;">
+                  <h1 style="color: #00d4ff;">vibecheck</h1>
+                  <p>Redirecting to login...</p>
+                  <p style="color: #888; font-size: 0.85rem;">If not redirected, <a href="#" style="color: #00d4ff;">click here</a>.</p>
+                </div>
+              </body>
+            </html>
+          `);
+        }
       } else {
         res.writeHead(302, { Location: "/login" });
         res.end();
@@ -159,8 +185,8 @@ async function waitForBrowserLogin(): Promise<{
       console.log("");
 
       // Try to open browser automatically
-      const { exec } = require("node:child_process");
-      exec(`open "${loginUrl}" 2>/dev/null || xdg-open "${loginUrl}" 2>/dev/null`);
+      const openCmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
+      execFile(openCmd, [loginUrl], () => {});
     });
 
     // Timeout after 5 minutes

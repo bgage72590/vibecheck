@@ -13,7 +13,7 @@ function NavBar() {
       <div className="flex items-center gap-3 sm:gap-6">
         <a href="#features" className="text-sm text-gray-400 hover:text-white transition hidden sm:inline">Features</a>
         <a href="#pricing" className="text-sm text-gray-400 hover:text-white transition hidden sm:inline">Pricing</a>
-        <a href="https://github.com/vibecheck/vibecheck" className="text-sm text-gray-400 hover:text-white transition hidden md:inline">GitHub</a>
+        <a href="https://github.com/vibecheck/vibecheck" target="_blank" rel="noopener noreferrer" className="text-sm text-gray-400 hover:text-white transition hidden md:inline">GitHub</a>
         <a
           href="/auth/login"
           className="text-sm px-4 py-2 rounded-lg bg-cyan-500 text-black font-semibold hover:bg-cyan-400 transition"
@@ -265,8 +265,8 @@ function Footer() {
           Stop being the next Leo. Scan your code before you ship.
         </p>
         <div className="flex gap-6 text-sm text-gray-500">
-          <a href="https://github.com/vibecheck/vibecheck" className="hover:text-white transition">GitHub</a>
-          <a href="mailto:hello@vibecheck.dev" className="hover:text-white transition">Contact</a>
+          <a href="https://github.com/vibecheck/vibecheck" target="_blank" rel="noopener noreferrer" className="hover:text-white transition">GitHub</a>
+          <a href="mailto:hello@vibecheck.dev" rel="noopener noreferrer" className="hover:text-white transition">Contact</a>
         </div>
       </div>
     </footer>

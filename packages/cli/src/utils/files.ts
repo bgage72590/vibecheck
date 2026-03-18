@@ -1,7 +1,7 @@
 import fg from "fast-glob";
 import ignore from "ignore";
 import { readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 const SOURCE_EXTENSIONS = [
   "js",
@@ -81,7 +81,10 @@ export function readFileContents(
   filePath: string,
 ): string | null {
   try {
-    const fullPath = join(directory, filePath);
+    const fullPath = resolve(join(directory, filePath));
+    if (!fullPath.startsWith(resolve(directory))) {
+      throw new Error("Path traversal detected");
+    }
     return readFileSync(fullPath, "utf-8");
   } catch {
     return null;

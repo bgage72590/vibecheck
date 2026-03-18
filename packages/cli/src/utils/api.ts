@@ -7,6 +7,10 @@ const TOKEN_FILE = join(CONFIG_DIR, "token.json");
 
 const API_BASE = process.env.VIBECHECK_API_URL ?? "https://api.vibecheck.dev";
 
+if (API_BASE.startsWith("http://") && !API_BASE.includes("localhost") && !API_BASE.includes("127.0.0.1")) {
+  console.warn("WARNING: API URL is not using HTTPS. This is insecure.");
+}
+
 interface TokenData {
   token: string;
   userId: string;
@@ -30,7 +34,7 @@ export function getStoredToken(): TokenData | null {
 }
 
 export function storeToken(data: TokenData): void {
-  mkdirSync(CONFIG_DIR, { recursive: true });
+  mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
   writeFileSync(TOKEN_FILE, JSON.stringify(data, null, 2), { mode: 0o600 });
 }
 

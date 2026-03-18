@@ -77,7 +77,8 @@ export async function runGitleaks(
         { timeout: 60_000, maxBuffer: 10 * 1024 * 1024 },
         (error, _stdout, stderr) => {
           if (error) {
-            reject(new Error(`Gitleaks failed: ${stderr || error.message}`));
+            const sanitizedError = (stderr || error.message).slice(0, 200);
+            reject(new Error(`Gitleaks failed: ${sanitizedError}`));
           } else {
             resolve();
           }

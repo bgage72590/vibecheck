@@ -1,3 +1,4 @@
+import { notFound } from "next/navigation";
 import Link from "next/link";
 import { StatCard } from "@/components/stat-card";
 import { FindingCard } from "@/components/finding-card";
@@ -9,7 +10,10 @@ export default async function ScanDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const scan = demoScans.find((s) => s.id === id) ?? demoScans[0];
+  const scan = demoScans.find((s) => s.id === id);
+  if (!scan) {
+    return notFound();
+  }
 
   return (
     <div className="max-w-4xl mx-auto px-6 py-8">

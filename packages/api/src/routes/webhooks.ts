@@ -23,6 +23,11 @@ app.post("/stripe", async (c) => {
 
   const body = await c.req.text();
 
+  if (!WEBHOOK_SECRET) {
+    console.error("STRIPE_WEBHOOK_SECRET not configured");
+    return c.json({ error: "Webhook not configured" }, 500);
+  }
+
   let event: Stripe.Event;
   try {
     event = getStripe().webhooks.constructEvent(body, signature, WEBHOOK_SECRET);

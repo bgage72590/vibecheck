@@ -17,6 +17,11 @@ app.post("/", requireAuth, async (c) => {
     return c.json({ error: "Missing required fields" }, 400);
   }
 
+  if (typeof directory !== "string" || directory.length > 500) return c.json({ error: "Invalid directory" }, 400);
+  if (typeof filesScanned !== "number" || filesScanned < 0 || filesScanned > 100000) return c.json({ error: "Invalid filesScanned" }, 400);
+  if (!Array.isArray(findings) || findings.length > 10000) return c.json({ error: "Invalid findings" }, 400);
+  if (typeof duration !== "number" || duration < 0) return c.json({ error: "Invalid duration" }, 400);
+
   const criticalCount = findings.filter((f: { severity: string }) => f.severity === "critical").length;
   const highCount = findings.filter((f: { severity: string }) => f.severity === "high").length;
   const mediumCount = findings.filter((f: { severity: string }) => f.severity === "medium").length;
@@ -44,8 +49,8 @@ app.post("/", requireAuth, async (c) => {
 // Get scan history
 app.get("/", requireAuth, async (c) => {
   const userId = c.get("userId");
-  const limit = parseInt(c.req.query("limit") ?? "20");
-  const offset = parseInt(c.req.query("offset") ?? "0");
+  const limit = Math.min(Math.max(1, parseInt(c.req.query("limit") ?? "20", 10) || 20), 100);
+  const offset = Math.max(0, parseInt(c.req.query("offset") ?? "0", 10) || 0);
 
   const results = await db
     .select({
@@ -80,18 +85,21 @@ app.get("/:id", requireAuth, async (c) => {
     .where(eq(scans.id, scanId))
     .limit(1);
 
-  if (!scan) {
+  if (!scan || scan.userId !== userId) {
     return c.json({ error: "Scan not found" }, 404);
   }
 
-  if (scan.userId !== userId) {
-    return c.json({ error: "Not authorized" }, 403);
+  let parsedFindings = [];
+  try {
+    parsedFindings = scan.findings ? JSON.parse(scan.findings as string) : [];
+  } catch {
+    parsedFindings = [];
   }
 
   return c.json({
     scan: {
       ...scan,
-      findings: scan.findings ? JSON.parse(scan.findings as string) : [],
+      findings: parsedFindings,
     },
   });
 });
