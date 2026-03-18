@@ -1,4 +1,6 @@
 {
+  "buildCommand": "echo done",
+  "outputDirectory": "public",
   "rewrites": [
     { "source": "/(.*)", "destination": "/api" }
   ]
