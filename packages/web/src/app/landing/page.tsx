@@ -47,10 +47,10 @@ function Hero() {
         </code>
         <span className="text-gray-600">or</span>
         <a
-          href="#pricing"
+          href="/scan"
           className="px-6 py-3 sm:py-3.5 rounded-xl bg-cyan-500 text-black font-bold text-base sm:text-lg hover:bg-cyan-400 transition w-full sm:w-auto text-center"
         >
-          Get Started Free
+          Scan Now — Free
         </a>
       </div>
 

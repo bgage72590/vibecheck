@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { StatCard } from "@/components/stat-card";
 import { TrendChart } from "@/components/trend-chart";
 import { ScanTable } from "@/components/scan-table";
@@ -17,6 +18,12 @@ export default function DashboardPage() {
           <p className="text-gray-500 text-sm">Security Dashboard</p>
         </div>
         <div className="flex items-center gap-3">
+          <Link
+            href="/scan"
+            className="px-4 py-2 bg-green-600 hover:bg-green-500 rounded-lg text-sm font-medium transition-colors"
+          >
+            Scan Now
+          </Link>
           <span className="text-xs px-3 py-1 rounded-full bg-gray-800 text-gray-400">
             FREE PLAN
           </span>
