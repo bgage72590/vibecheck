@@ -1,6 +1,7 @@
 {
   "name": "vibecheck-monorepo",
   "private": true,
+  "packageManager": "pnpm@10.28.0",
   "scripts": {
     "build": "turbo build",
     "dev": "turbo dev",
