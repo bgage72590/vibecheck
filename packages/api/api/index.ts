@@ -17,7 +17,7 @@ app.get("/", (c) => {
     name: "vibecheck-api",
     version: "0.1.0",
     status: "ok",
-    database: process.env.TURSO_DATABASE_URL ? "configured" : "not configured",
+    database: "pending setup",
   });
 });
 
