@@ -1,5 +1,5 @@
 {
-  "name": "vibecheck",
+  "name": "vibecheckdev",
   "version": "0.1.0",
   "description": "AI security scanner for vibe-coded apps. Find vulnerabilities before attackers do.",
   "type": "module",
