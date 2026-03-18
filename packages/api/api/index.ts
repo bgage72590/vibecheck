@@ -4,18 +4,12 @@ import { cors } from "hono/cors";
 
 export const config = {
   runtime: "nodejs",
+  maxDuration: 10,
 };
 
 const app = new Hono().basePath("/api");
 
-app.use(
-  "*",
-  cors({
-    origin: "*",
-    allowMethods: ["GET", "POST", "PUT", "DELETE"],
-    allowHeaders: ["Authorization", "Content-Type"],
-  }),
-);
+app.use("*", cors({ origin: "*" }));
 
 // Health check
 app.get("/", (c) => {
@@ -23,44 +17,51 @@ app.get("/", (c) => {
     name: "vibecheck-api",
     version: "0.1.0",
     status: "ok",
+    database: process.env.TURSO_DATABASE_URL ? "configured" : "not configured",
   });
 });
 
-// Usage check (stub — full implementation requires Turso DB env vars)
+// Stub endpoints — will connect to DB once env vars are set
 app.get("/usage/check", (c) => {
-  const authHeader = c.req.header("Authorization");
-  if (!authHeader?.startsWith("Bearer ")) {
+  if (!c.req.header("Authorization")?.startsWith("Bearer ")) {
     return c.json({ error: "Missing or invalid Authorization header" }, 401);
   }
   return c.json({ allowed: true, plan: "free", remaining: 3, limit: 3 });
 });
 
-// Scans endpoint (stub)
-app.post("/scans", (c) => {
-  const authHeader = c.req.header("Authorization");
-  if (!authHeader?.startsWith("Bearer ")) {
+app.post("/usage/increment", (c) => {
+  if (!c.req.header("Authorization")?.startsWith("Bearer ")) {
     return c.json({ error: "Missing or invalid Authorization header" }, 401);
   }
   return c.json({ ok: true });
 });
 
-// Webhooks (stub)
+app.post("/scans", (c) => {
+  if (!c.req.header("Authorization")?.startsWith("Bearer ")) {
+    return c.json({ error: "Missing or invalid Authorization header" }, 401);
+  }
+  return c.json({ ok: true }, 201);
+});
+
+app.get("/scans", (c) => {
+  if (!c.req.header("Authorization")?.startsWith("Bearer ")) {
+    return c.json({ error: "Missing or invalid Authorization header" }, 401);
+  }
+  return c.json({ scans: [] });
+});
+
+app.post("/users/sync", (c) => {
+  if (!c.req.header("Authorization")?.startsWith("Bearer ")) {
+    return c.json({ error: "Missing or invalid Authorization header" }, 401);
+  }
+  return c.json({ user: { plan: "free" } });
+});
+
 app.post("/webhooks/stripe", (c) => {
-  const signature = c.req.header("stripe-signature");
-  if (!signature) {
+  if (!c.req.header("stripe-signature")) {
     return c.json({ error: "Missing stripe-signature header" }, 400);
   }
   return c.json({ received: true });
-});
-
-// Catch-all for unmatched routes
-app.all("/*", (c) => {
-  return c.json({
-    name: "vibecheck-api",
-    version: "0.1.0",
-    status: "ok",
-    note: "Use /api for the health check endpoint",
-  });
 });
 
 export default handle(app);
