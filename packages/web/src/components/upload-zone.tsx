@@ -8,6 +8,7 @@ const ALLOWED_EXTENSIONS = new Set([
   ".vue", ".svelte", ".astro",
   ".env", ".yaml", ".yml", ".toml", ".json",
   ".html", ".htm", ".sql",
+  ".swift", ".kt", ".kts", ".dart", ".cs", ".c", ".cpp", ".h",
 ]);
 
 function getExtension(name: string): string {
@@ -144,7 +145,7 @@ export function UploadZone({ onFilesSelected, disabled }: UploadZoneProps) {
           </button>
         </div>
         <p className="text-gray-600 text-xs mt-4">
-          Supports .js, .ts, .py, .env, .yaml, .json, and more. Max 5MB.
+          Supports .js, .ts, .py, .swift, .go, .env, .json, and more. ZIP files of any size OK — we extract source code automatically.
         </p>
       </div>
 

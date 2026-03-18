@@ -13,6 +13,7 @@ const SOURCE_EXTENSIONS = new Set([
   ".vue", ".svelte", ".astro",
   ".env", ".yaml", ".yml", ".toml", ".json",
   ".html", ".htm", ".sql",
+  ".swift", ".kt", ".kts", ".dart", ".cs", ".c", ".cpp", ".h",
 ]);
 
 function getSnippet(content, lineNum, context = 2) {
@@ -272,9 +273,9 @@ app.post("/scans/upload", async (c) => {
         return c.json({ error: "Invalid zip file" }, 400);
       }
 
-      // Size check (5MB)
-      if (zipFile.size > 5 * 1024 * 1024) {
-        return c.json({ error: "File too large. Maximum 5MB." }, 413);
+      // Size check (25MB for ZIP uploads)
+      if (zipFile.size > 25 * 1024 * 1024) {
+        return c.json({ error: "ZIP too large. Maximum 25MB." }, 413);
       }
 
       const { unzipSync } = require("fflate");
@@ -378,6 +379,73 @@ app.post("/scans/upload", async (c) => {
     });
   } catch (err) {
     console.error("Upload scan error:", err);
+    return c.json({ error: "Scan failed. Please try again." }, 500);
+  }
+});
+
+// ────────────────────────────────────────────
+// JSON UPLOAD + SCAN (client extracts ZIP, sends source text only)
+// ────────────────────────────────────────────
+
+app.post("/scans/upload-json", async (c) => {
+  // Rate limit: 10 per minute per IP
+  const ip = c.req.header("x-forwarded-for") || c.req.header("x-real-ip") || "unknown";
+  const now = Date.now();
+  const rateEntry = uploadRateStore.get(ip);
+  if (rateEntry && now < rateEntry.resetAt) {
+    if (rateEntry.count >= 10) {
+      return c.json({ error: "Too many scans. Try again in a minute." }, 429);
+    }
+    rateEntry.count++;
+  } else {
+    uploadRateStore.set(ip, { count: 1, resetAt: now + 60000 });
+  }
+
+  try {
+    const body = await c.req.json();
+
+    if (!body.files || !Array.isArray(body.files)) {
+      return c.json({ error: "Expected { files: [{ path, content }] }" }, 400);
+    }
+
+    if (body.files.length === 0) {
+      return c.json({ error: "No files provided." }, 400);
+    }
+
+    if (body.files.length > 500) {
+      return c.json({ error: "Too many files. Maximum 500." }, 400);
+    }
+
+    const startTime = Date.now();
+    const filesToScan = [];
+
+    for (const file of body.files) {
+      if (!file.path || typeof file.content !== "string") continue;
+      // Path traversal protection
+      if (file.path.includes("..") || file.path.startsWith("/")) continue;
+      // Size cap per file (500KB)
+      if (file.content.length > 500 * 1024) continue;
+      filesToScan.push({ path: file.path, content: file.content });
+    }
+
+    if (filesToScan.length === 0) {
+      return c.json({ error: "No valid source files to scan." }, 400);
+    }
+
+    const findings = runScan(filesToScan);
+    const duration = Date.now() - startTime;
+
+    return c.json({
+      findings,
+      filesScanned: filesToScan.length,
+      duration,
+      criticalCount: findings.filter(f => f.severity === "critical").length,
+      highCount: findings.filter(f => f.severity === "high").length,
+      mediumCount: findings.filter(f => f.severity === "medium").length,
+      lowCount: findings.filter(f => f.severity === "low").length,
+    });
+  } catch (err) {
+    console.error("JSON scan error:", err);
     return c.json({ error: "Scan failed. Please try again." }, 500);
   }
 });

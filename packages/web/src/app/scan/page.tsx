@@ -7,7 +7,7 @@ import { FindingCard } from "@/components/finding-card";
 import type { Finding } from "@/lib/demo-data";
 import Link from "next/link";
 
-type ScanState = "idle" | "scanning" | "results" | "error";
+type ScanState = "idle" | "extracting" | "scanning" | "results" | "error";
 
 interface ScanResults {
   findings: Finding[];
@@ -19,33 +19,127 @@ interface ScanResults {
   lowCount: number;
 }
 
+const SOURCE_EXTENSIONS = new Set([
+  ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs",
+  ".py", ".rb", ".go", ".rs", ".java", ".php",
+  ".vue", ".svelte", ".astro",
+  ".env", ".yaml", ".yml", ".toml", ".json",
+  ".html", ".htm", ".sql",
+  ".swift", ".kt", ".kts", ".dart", ".cs", ".c", ".cpp", ".h",
+]);
+
+// Skip directories that are never useful to scan
+const SKIP_DIRS = new Set([
+  "node_modules", ".git", ".build", "build", "dist", ".next",
+  "__pycache__", ".gradle", "Pods", "DerivedData",
+  "__MACOSX", ".app", ".framework", ".dSYM",
+]);
+
+function getExt(name: string): string {
+  const dot = name.lastIndexOf(".");
+  return dot >= 0 ? name.substring(dot).toLowerCase() : "";
+}
+
+function shouldSkipPath(path: string): boolean {
+  const parts = path.split("/");
+  for (const part of parts) {
+    if (SKIP_DIRS.has(part)) return true;
+    // Skip .app bundles and similar
+    if (part.endsWith(".app") || part.endsWith(".framework") || part.endsWith(".dSYM")) return true;
+  }
+  return false;
+}
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://vibecheck-api-gs4b.vercel.app";
 
 export default function ScanPage() {
   const [state, setState] = useState<ScanState>("idle");
   const [results, setResults] = useState<ScanResults | null>(null);
   const [error, setError] = useState<string>("");
-  const [scanningFileCount, setScanningFileCount] = useState(0);
+  const [statusMessage, setStatusMessage] = useState("");
 
   const handleFilesSelected = useCallback(async (files: File[], isZip: boolean) => {
-    setState("scanning");
-    setScanningFileCount(files.length);
     setError("");
 
     try {
-      const formData = new FormData();
+      let sourceFiles: { path: string; content: string }[] = [];
 
       if (isZip) {
-        formData.append("zip", files[0]);
+        setState("extracting");
+        setStatusMessage("Extracting ZIP file...");
+
+        // Dynamic import to keep bundle small
+        const { unzipSync } = await import("fflate");
+
+        const zipFile = files[0];
+        const buffer = new Uint8Array(await zipFile.arrayBuffer());
+
+        let entries: Record<string, Uint8Array>;
+        try {
+          entries = unzipSync(buffer);
+        } catch {
+          setError("Invalid or corrupted ZIP file.");
+          setState("error");
+          return;
+        }
+
+        const decoder = new TextDecoder("utf-8", { fatal: true });
+
+        for (const [path, data] of Object.entries(entries)) {
+          // Skip directories
+          if (path.endsWith("/")) continue;
+          // Skip build artifacts, node_modules, etc.
+          if (shouldSkipPath(path)) continue;
+          // Skip path traversal
+          if (path.includes("..") || path.startsWith("/")) continue;
+          // Check extension
+          if (!SOURCE_EXTENSIONS.has(getExt(path))) continue;
+          // Skip large files (>500KB is probably not source code)
+          if (data.length > 500 * 1024) continue;
+
+          try {
+            const content = decoder.decode(data);
+            sourceFiles.push({ path, content });
+          } catch {
+            // Skip binary files that can't be decoded as UTF-8
+          }
+        }
+
+        if (sourceFiles.length === 0) {
+          setError("No scannable source files found in the ZIP. We scan .js, .ts, .py, .swift, .go, .env, and more.");
+          setState("error");
+          return;
+        }
+
+        setStatusMessage(`Found ${sourceFiles.length} source files. Scanning...`);
       } else {
+        setState("extracting");
+        setStatusMessage("Reading files...");
+
         for (const file of files) {
-          formData.append("files", file, file.name);
+          try {
+            const content = await file.text();
+            sourceFiles.push({ path: file.name, content });
+          } catch {
+            // Skip unreadable files
+          }
+        }
+
+        if (sourceFiles.length === 0) {
+          setError("No readable source files found.");
+          setState("error");
+          return;
         }
       }
 
-      const response = await fetch(`${API_URL}/api/scans/upload`, {
+      // Now send just the source text as JSON (much smaller than the full ZIP)
+      setState("scanning");
+      setStatusMessage(`Scanning ${sourceFiles.length} files for vulnerabilities...`);
+
+      const response = await fetch(`${API_URL}/api/scans/upload-json`, {
         method: "POST",
-        body: formData,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ files: sourceFiles }),
       });
 
       const data = await response.json();
@@ -59,7 +153,8 @@ export default function ScanPage() {
       setResults(data);
       setState("results");
     } catch (err) {
-      setError("Failed to connect to the scan server. Please try again.");
+      console.error("Scan error:", err);
+      setError("Something went wrong. Please try again.");
       setState("error");
     }
   }, []);
@@ -68,6 +163,7 @@ export default function ScanPage() {
     setState("idle");
     setResults(null);
     setError("");
+    setStatusMessage("");
   }, []);
 
   return (
@@ -98,13 +194,15 @@ export default function ScanPage() {
         </>
       )}
 
-      {/* Scanning state */}
-      {state === "scanning" && (
+      {/* Extracting / Scanning state */}
+      {(state === "extracting" || state === "scanning") && (
         <div className="bg-[#1a1a2e] rounded-xl p-12 text-center">
           <div className="animate-spin text-4xl mb-4 inline-block">*</div>
-          <p className="text-lg font-medium mb-2">Scanning files...</p>
+          <p className="text-lg font-medium mb-2">
+            {state === "extracting" ? "Preparing files..." : "Scanning for vulnerabilities..."}
+          </p>
           <p className="text-gray-500 text-sm">
-            Analyzing {scanningFileCount} file{scanningFileCount > 1 ? "s" : ""} for security vulnerabilities
+            {statusMessage}
           </p>
         </div>
       )}
@@ -194,11 +292,11 @@ export default function ScanPage() {
           <div className="grid sm:grid-cols-3 gap-4 text-sm text-gray-400">
             <div>
               <div className="text-cyan-400 font-medium mb-1">1. Upload</div>
-              <p>Drop your project files or upload a ZIP. We accept JavaScript, TypeScript, Python, and more.</p>
+              <p>Drop your project files or a ZIP. We extract only source code — binaries and build artifacts are automatically skipped.</p>
             </div>
             <div>
               <div className="text-cyan-400 font-medium mb-1">2. Scan</div>
-              <p>Our engine runs 10 security rules checking for hardcoded secrets, SQL injection, XSS, missing auth, and more.</p>
+              <p>Our engine runs 10+ security rules checking for hardcoded secrets, SQL injection, XSS, missing auth, and more.</p>
             </div>
             <div>
               <div className="text-cyan-400 font-medium mb-1">3. Fix</div>
