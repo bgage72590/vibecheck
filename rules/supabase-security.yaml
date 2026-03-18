@@ -1,0 +1,48 @@
+rules:
+  - id: vibecheck.supabase-service-role-client
+    patterns:
+      - pattern: createClient($URL, $KEY)
+      - metavariable-regex:
+          metavariable: $KEY
+          regex: .*service.?role.*
+    message: >
+      Supabase client initialized with service_role key. This key bypasses
+      Row Level Security (RLS) and grants full database access. If exposed
+      in client-side code or API responses, attackers can read, modify, or
+      delete any data in your database.
+    severity: ERROR
+    languages: [javascript, typescript]
+    metadata:
+      category: authorization
+      confidence: HIGH
+
+  - id: vibecheck.supabase-rls-bypass-rpc
+    pattern: $CLIENT.rpc($FUNC, ...)
+    message: >
+      Supabase RPC call detected. Ensure the underlying database function
+      has SECURITY DEFINER removed (or uses SECURITY INVOKER) and that RLS
+      policies apply. RPC functions can bypass RLS if misconfigured.
+    severity: WARNING
+    languages: [javascript, typescript]
+    metadata:
+      category: authorization
+      confidence: MEDIUM
+
+  - id: vibecheck.supabase-anon-key-in-source
+    patterns:
+      - pattern-either:
+          - pattern: |
+              const $KEY = "eyJ..."
+          - pattern: |
+              supabaseKey: "eyJ..."
+          - pattern: |
+              anon_key: "eyJ..."
+    message: >
+      Supabase key appears to be hardcoded. While anon keys are designed to
+      be public, ensure RLS policies are properly configured on all tables.
+      Without RLS, anyone with this key can read/write your entire database.
+    severity: WARNING
+    languages: [javascript, typescript]
+    metadata:
+      category: authorization
+      confidence: MEDIUM

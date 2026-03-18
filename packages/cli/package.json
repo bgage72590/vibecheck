@@ -1,0 +1,65 @@
+{
+  "name": "vibecheck",
+  "version": "0.1.0",
+  "description": "AI security scanner for vibe-coded apps. Find vulnerabilities before attackers do.",
+  "type": "module",
+  "bin": {
+    "vibecheck": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "security",
+    "scanner",
+    "vibe-coding",
+    "ai",
+    "vulnerability",
+    "owasp",
+    "appsec",
+    "sast",
+    "cursor",
+    "lovable",
+    "bolt",
+    "replit",
+    "claude",
+    "ai-code",
+    "devsecops"
+  ],
+  "author": "VibeCheck <hello@vibecheck.dev>",
+  "license": "MIT",
+  "homepage": "https://vibecheck.dev",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vibecheck/vibecheck"
+  },
+  "bugs": {
+    "url": "https://github.com/vibecheck/vibecheck/issues"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "chalk": "^5.4.1",
+    "cli-table3": "^0.6.5",
+    "commander": "^13.1.0",
+    "cosmiconfig": "^9.0.0",
+    "fast-glob": "^3.3.3",
+    "ignore": "^7.0.3",
+    "ora": "^8.2.0"
+  },
+  "devDependencies": {
+    "tsup": "^8.3.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

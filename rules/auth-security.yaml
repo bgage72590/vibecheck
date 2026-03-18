@@ -1,0 +1,56 @@
+rules:
+  - id: vibecheck.nextjs-api-no-auth
+    patterns:
+      - pattern-either:
+          - pattern: |
+              export async function GET($REQ) { ... }
+          - pattern: |
+              export async function POST($REQ) { ... }
+          - pattern: |
+              export async function PUT($REQ) { ... }
+          - pattern: |
+              export async function DELETE($REQ) { ... }
+      - pattern-not-inside: |
+          ... getServerSession(...) ...
+      - pattern-not-inside: |
+          ... auth(...) ...
+      - pattern-not-inside: |
+          ... getToken(...) ...
+      - pattern-not-inside: |
+          ... currentUser(...) ...
+    message: >
+      Next.js API route handler without authentication. Any user (or bot)
+      can call this endpoint. Add session verification using your auth
+      provider (NextAuth getServerSession, Clerk auth(), etc.).
+    severity: WARNING
+    languages: [javascript, typescript]
+    paths:
+      include:
+        - "**/api/**"
+        - "**/app/api/**"
+    metadata:
+      category: authentication
+      confidence: MEDIUM
+
+  - id: vibecheck.client-side-admin-check
+    patterns:
+      - pattern-either:
+          - pattern: |
+              $X.role === "admin" && <$TAG ...>...</$TAG>
+          - pattern: |
+              isAdmin && <$TAG ...>...</$TAG>
+          - pattern: |
+              $X?.isAdmin && <$TAG ...>...</$TAG>
+    message: >
+      Admin check only in client-side rendering. Hiding UI elements does
+      NOT prevent access — users can call the underlying API directly
+      using DevTools or curl. Always verify admin status server-side.
+    severity: WARNING
+    languages: [javascript, typescript]
+    paths:
+      include:
+        - "**/*.jsx"
+        - "**/*.tsx"
+    metadata:
+      category: authorization
+      confidence: MEDIUM

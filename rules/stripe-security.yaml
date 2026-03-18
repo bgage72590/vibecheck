@@ -1,0 +1,43 @@
+rules:
+  - id: vibecheck.stripe-webhook-no-verification
+    patterns:
+      - pattern-either:
+          - pattern: |
+              app.post($PATH, async ($REQ, $RES) => {
+                ...
+                $REQ.body
+                ...
+              })
+          - pattern: |
+              app.post($PATH, ($REQ, $RES) => {
+                ...
+                $REQ.body
+                ...
+              })
+      - metavariable-regex:
+          metavariable: $PATH
+          regex: .*webhook.*
+      - pattern-not-inside: |
+          stripe.webhooks.constructEvent(...)
+    message: >
+      Stripe webhook endpoint does not verify the webhook signature.
+      Without verification, attackers can send fake payment events to
+      your server — for example, marking orders as paid without actually
+      paying. Use stripe.webhooks.constructEvent() to verify signatures.
+    severity: ERROR
+    languages: [javascript, typescript]
+    metadata:
+      category: payment-security
+      confidence: HIGH
+
+  - id: vibecheck.stripe-secret-key-client
+    pattern-regex: sk_live_[a-zA-Z0-9]{20,}
+    message: >
+      Stripe live secret key found in source code. This key can be used
+      to create charges, refunds, and access all your Stripe data.
+      Move it to an environment variable immediately.
+    severity: ERROR
+    languages: [javascript, typescript, python, ruby, go, java]
+    metadata:
+      category: secrets
+      confidence: HIGH

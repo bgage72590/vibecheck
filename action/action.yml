@@ -1,0 +1,99 @@
+name: "VibeCheck Security Scanner"
+description: "AI-powered security scanner for vibe-coded apps. Find vulnerabilities before attackers do."
+branding:
+  icon: "shield"
+  color: "blue"
+
+inputs:
+  directory:
+    description: "Directory to scan (default: current directory)"
+    required: false
+    default: "."
+  format:
+    description: "Output format: terminal, json, sarif"
+    required: false
+    default: "sarif"
+  ai:
+    description: "Enable AI-powered analysis (requires ANTHROPIC_API_KEY secret)"
+    required: false
+    default: "true"
+  fail-on-findings:
+    description: "Fail the action if critical or high severity findings are found"
+    required: false
+    default: "true"
+  anthropic-api-key:
+    description: "Anthropic API key for AI analysis"
+    required: false
+
+outputs:
+  findings-count:
+    description: "Total number of findings"
+  critical-count:
+    description: "Number of critical findings"
+  high-count:
+    description: "Number of high findings"
+  sarif-file:
+    description: "Path to SARIF output file (when format is sarif)"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: "20"
+
+    - name: Install VibeCheck
+      shell: bash
+      run: npm install -g vibecheck
+
+    - name: Run VibeCheck scan
+      id: scan
+      shell: bash
+      env:
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+      run: |
+        ARGS="${{ inputs.directory }}"
+
+        if [ "${{ inputs.ai }}" = "false" ]; then
+          ARGS="$ARGS --no-ai"
+        fi
+
+        if [ "${{ inputs.format }}" = "sarif" ]; then
+          vibecheck scan $ARGS --format sarif > vibecheck-results.sarif 2>/dev/null || true
+          echo "sarif-file=vibecheck-results.sarif" >> "$GITHUB_OUTPUT"
+
+          # Also run terminal format for the log
+          vibecheck scan $ARGS --no-ai 2>&1 || true
+        else
+          vibecheck scan $ARGS --format ${{ inputs.format }} 2>&1 || true
+        fi
+
+        # Get counts from JSON output
+        RESULT=$(vibecheck scan $ARGS --format json --no-ai 2>/dev/null || echo '{"findings":[]}')
+        TOTAL=$(echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('findings',[])))" 2>/dev/null || echo "0")
+        CRITICAL=$(echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len([f for f in d.get('findings',[]) if f.get('severity')=='critical']))" 2>/dev/null || echo "0")
+        HIGH=$(echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len([f for f in d.get('findings',[]) if f.get('severity')=='high']))" 2>/dev/null || echo "0")
+
+        echo "findings-count=$TOTAL" >> "$GITHUB_OUTPUT"
+        echo "critical-count=$CRITICAL" >> "$GITHUB_OUTPUT"
+        echo "high-count=$HIGH" >> "$GITHUB_OUTPUT"
+
+    - name: Upload SARIF to GitHub Security
+      if: inputs.format == 'sarif' && hashFiles('vibecheck-results.sarif') != ''
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: vibecheck-results.sarif
+        category: vibecheck
+
+    - name: Check for critical/high findings
+      if: inputs.fail-on-findings == 'true'
+      shell: bash
+      run: |
+        CRITICAL=${{ steps.scan.outputs.critical-count }}
+        HIGH=${{ steps.scan.outputs.high-count }}
+
+        if [ "$CRITICAL" -gt 0 ] || [ "$HIGH" -gt 0 ]; then
+          echo "::error::VibeCheck found $CRITICAL critical and $HIGH high severity vulnerabilities"
+          exit 1
+        fi

@@ -1,0 +1,13 @@
+node_modules
+dist
+.next
+.turbo
+*.tsbuildinfo
+.env
+.env.local
+.env.production
+local.db
+local.db-shm
+local.db-wal
+.DS_Store
+*.log
