@@ -1,5 +1,5 @@
-import { Hono } from "hono";
-import { handle } from "hono/vercel";
+const { Hono } = require("hono");
+const { handle } = require("hono/vercel");
 
 const app = new Hono().basePath("/api");
 
@@ -54,4 +54,4 @@ app.all("/*", (c) => {
   return c.json({ name: "vibecheck-api", version: "0.1.0", status: "ok" });
 });
 
-export default handle(app);
+module.exports = handle(app);
