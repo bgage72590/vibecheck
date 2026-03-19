@@ -24,7 +24,7 @@ const SOURCE_EXTENSIONS = new Set([
   ".py", ".rb", ".go", ".rs", ".java", ".php",
   ".vue", ".svelte", ".astro",
   ".env", ".yaml", ".yml", ".toml", ".json",
-  ".html", ".htm", ".sql",
+  ".html", ".htm", ".sql", ".sh", ".bash", ".zsh",
   ".swift", ".kt", ".kts", ".dart", ".cs", ".c", ".cpp", ".h",
 ]);
 
