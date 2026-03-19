@@ -99,6 +99,13 @@ export async function collectFiles(directory: string): Promise<string[]> {
     ig.add(gitignoreContent);
   }
 
+  // Load .vibecheckignore if present
+  const vibecheckIgnorePath = join(directory, ".vibecheckignore");
+  if (existsSync(vibecheckIgnorePath)) {
+    const vibecheckIgnoreContent = readFileSync(vibecheckIgnorePath, "utf-8");
+    ig.add(vibecheckIgnoreContent);
+  }
+
   // Always ignore these
   ig.add(ALWAYS_IGNORE);
 

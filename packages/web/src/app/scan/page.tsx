@@ -50,12 +50,21 @@ function getExt(name: string): string {
   return dot >= 0 ? name.substring(dot).toLowerCase() : "";
 }
 
-function shouldSkipPath(path: string): boolean {
+function shouldSkipPath(path: string, ignorePatterns: string[] = []): boolean {
   const parts = path.split("/");
   for (const part of parts) {
     if (SKIP_DIRS.has(part)) return true;
-    // Skip .app bundles and similar
     if (part.endsWith(".app") || part.endsWith(".framework") || part.endsWith(".dSYM")) return true;
+  }
+  // Check .vibecheckignore patterns
+  for (const pattern of ignorePatterns) {
+    if (!pattern || pattern.startsWith("#")) continue;
+    const trimmed = pattern.trim();
+    if (!trimmed) continue;
+    // Simple matching: check if path starts with or contains the pattern
+    if (path.startsWith(trimmed) || path.includes("/" + trimmed)) return true;
+    // Handle trailing slash (directory patterns)
+    if (trimmed.endsWith("/") && path.startsWith(trimmed.slice(0, -1))) return true;
   }
   return false;
 }
@@ -100,11 +109,23 @@ export default function ScanPage() {
           return;
         }
 
+        // Check for .vibecheckignore in the ZIP
+        let ignorePatterns: string[] = [];
+        for (const [path, data] of Object.entries(entries)) {
+          const name = path.split("/").pop() || "";
+          if (name === ".vibecheckignore") {
+            try {
+              ignorePatterns = new TextDecoder("utf-8").decode(data).split("\n");
+            } catch { /* ignore */ }
+            break;
+          }
+        }
+
         for (const [path, data] of Object.entries(entries)) {
           // Skip directories
           if (path.endsWith("/")) continue;
           // Skip build artifacts, node_modules, etc. BEFORE decoding
-          if (shouldSkipPath(path)) continue;
+          if (shouldSkipPath(path, ignorePatterns)) continue;
           // Skip path traversal
           if (path.includes("..") || path.startsWith("/")) continue;
           // Check extension or filename BEFORE decoding

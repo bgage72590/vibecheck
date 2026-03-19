@@ -1,0 +1,9 @@
+# Test fixtures — intentionally insecure code for testing
+test-app/
+packages/cli/src/__tests__/
+
+# Semgrep rule definitions — contain patterns, not real code
+rules/
+
+# Demo data — contains redacted example snippets
+packages/web/src/lib/demo-data.ts
