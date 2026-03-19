@@ -189,6 +189,105 @@ export default function ScanPage() {
     setStatusMessage("");
   }, []);
 
+  const [copyLabel, setCopyLabel] = useState("Copy as AI Prompt");
+
+  const generateMarkdownReport = useCallback((r: ScanResults): string => {
+    const lines: string[] = [
+      "# VibeCheck Security Report",
+      "",
+      `- **Files Scanned:** ${r.filesScanned}`,
+      `- **Total Findings:** ${r.findings.length}`,
+      `- **Critical:** ${r.criticalCount} | **High:** ${r.highCount} | **Medium:** ${r.mediumCount}`,
+      `- **Scan Duration:** ${(r.duration / 1000).toFixed(1)}s`,
+      "",
+    ];
+
+    const sorted = [...r.findings].sort((a, b) => {
+      const order: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
+      return (order[a.severity] ?? 5) - (order[b.severity] ?? 5);
+    });
+
+    for (const f of sorted) {
+      lines.push(`## [${f.severity.toUpperCase()}] ${f.title}`);
+      lines.push("");
+      lines.push(`- **Rule:** ${f.rule}`);
+      lines.push(`- **File:** \`${f.file}\` (line ${f.line})`);
+      lines.push(`- **Category:** ${f.category}`);
+      if (f.description) lines.push(`- **Why:** ${f.description}`);
+      if (f.fix) lines.push(`- **Fix:** ${f.fix}`);
+      if (f.snippet) {
+        lines.push("");
+        lines.push("```");
+        lines.push(f.snippet);
+        lines.push("```");
+      }
+      lines.push("");
+    }
+
+    return lines.join("\n");
+  }, []);
+
+  const generateAIPrompt = useCallback((r: ScanResults): string => {
+    const lines: string[] = [
+      "Fix the following security vulnerabilities found by VibeCheck. For each finding, apply the suggested fix. Do not change any other code.",
+      "",
+    ];
+
+    const sorted = [...r.findings].sort((a, b) => {
+      const order: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
+      return (order[a.severity] ?? 5) - (order[b.severity] ?? 5);
+    });
+
+    for (let i = 0; i < sorted.length; i++) {
+      const f = sorted[i];
+      lines.push(`### ${i + 1}. [${f.severity.toUpperCase()}] ${f.title}`);
+      lines.push(`File: ${f.file}, Line: ${f.line}`);
+      lines.push(`Problem: ${f.description || f.title}`);
+      lines.push(`Fix: ${f.fix || "See rule " + f.rule}`);
+      if (f.snippet) {
+        lines.push("Current code:");
+        lines.push("```");
+        lines.push(f.snippet);
+        lines.push("```");
+      }
+      lines.push("");
+    }
+
+    return lines.join("\n");
+  }, []);
+
+  const handleExportMarkdown = useCallback(() => {
+    if (!results) return;
+    const md = generateMarkdownReport(results);
+    const blob = new Blob([md], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "vibecheck-report.md";
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [results, generateMarkdownReport]);
+
+  const handleExportJSON = useCallback(() => {
+    if (!results) return;
+    const blob = new Blob([JSON.stringify(results, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "vibecheck-report.json";
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [results]);
+
+  const handleCopyAIPrompt = useCallback(() => {
+    if (!results) return;
+    const prompt = generateAIPrompt(results);
+    navigator.clipboard.writeText(prompt).then(() => {
+      setCopyLabel("Copied!");
+      setTimeout(() => setCopyLabel("Copy as AI Prompt"), 2000);
+    });
+  }, [results, generateAIPrompt]);
+
   return (
     <div className="max-w-6xl mx-auto px-6 py-8">
       {/* Header */}
@@ -262,18 +361,46 @@ export default function ScanPage() {
             />
           </div>
 
-          {/* Scan metadata */}
-          <div className="bg-[#1a1a2e] rounded-xl p-4 flex items-center justify-between">
-            <p className="text-gray-400 text-sm">
-              Scanned {results.filesScanned} files in {(results.duration / 1000).toFixed(1)}s
-            </p>
-            <button
-              type="button"
-              onClick={handleReset}
-              className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-sm font-medium transition-colors"
-            >
-              Scan Again
-            </button>
+          {/* Scan metadata + actions */}
+          <div className="bg-[#1a1a2e] rounded-xl p-4">
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-gray-400 text-sm">
+                Scanned {results.filesScanned} files in {(results.duration / 1000).toFixed(1)}s
+              </p>
+              <button
+                type="button"
+                onClick={handleReset}
+                className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-sm font-medium transition-colors"
+              >
+                Scan Again
+              </button>
+            </div>
+
+            {results.findings.length > 0 && (
+              <div className="flex flex-wrap gap-2 pt-3 border-t border-gray-700">
+                <button
+                  type="button"
+                  onClick={handleCopyAIPrompt}
+                  className="px-4 py-2 bg-purple-600 hover:bg-purple-500 rounded-lg text-sm font-medium transition-colors"
+                >
+                  {copyLabel}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExportMarkdown}
+                  className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm font-medium transition-colors"
+                >
+                  Export Markdown
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExportJSON}
+                  className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm font-medium transition-colors"
+                >
+                  Export JSON
+                </button>
+              </div>
+            )}
           </div>
 
           {/* No findings message */}
