@@ -66,39 +66,45 @@ export default function ScanPage() {
 
       if (isZip) {
         setState("extracting");
-        setStatusMessage("Extracting ZIP file...");
+
+        const zipFile = files[0];
+
+        // Warn if ZIP is very large (>100MB) — browser may struggle
+        if (zipFile.size > 100 * 1024 * 1024) {
+          setStatusMessage(`Large ZIP (${(zipFile.size / (1024*1024)).toFixed(0)}MB) — extracting, this may take a moment...`);
+        } else {
+          setStatusMessage("Extracting ZIP file...");
+        }
 
         // Dynamic import to keep bundle small
         const { unzipSync } = await import("fflate");
 
-        const zipFile = files[0];
-        const buffer = new Uint8Array(await zipFile.arrayBuffer());
+        const zipBuffer = new Uint8Array(await zipFile.arrayBuffer());
 
         let entries: Record<string, Uint8Array>;
         try {
-          entries = unzipSync(buffer);
+          entries = unzipSync(zipBuffer);
         } catch {
-          setError("Invalid or corrupted ZIP file.");
+          setError("Invalid or corrupted ZIP file. Try re-zipping the project folder.");
           setState("error");
           return;
         }
 
-        const decoder = new TextDecoder("utf-8", { fatal: true });
-
         for (const [path, data] of Object.entries(entries)) {
           // Skip directories
           if (path.endsWith("/")) continue;
-          // Skip build artifacts, node_modules, etc.
+          // Skip build artifacts, node_modules, etc. BEFORE decoding
           if (shouldSkipPath(path)) continue;
           // Skip path traversal
           if (path.includes("..") || path.startsWith("/")) continue;
-          // Check extension
+          // Check extension BEFORE decoding
           if (!SOURCE_EXTENSIONS.has(getExt(path))) continue;
           // Skip large files (>500KB is probably not source code)
           if (data.length > 500 * 1024) continue;
 
           try {
-            const content = decoder.decode(data);
+            // Create a fresh decoder per file — reusing with fatal:true can break
+            const content = new TextDecoder("utf-8", { fatal: true }).decode(data);
             sourceFiles.push({ path, content });
           } catch {
             // Skip binary files that can't be decoded as UTF-8
@@ -154,7 +160,13 @@ export default function ScanPage() {
       setState("results");
     } catch (err) {
       console.error("Scan error:", err);
-      setError("Something went wrong. Please try again.");
+      if (err instanceof TypeError && (err.message.includes("fetch") || err.message.includes("network"))) {
+        setError("Failed to connect to the scan server. Please try again.");
+      } else if (err instanceof RangeError || (err instanceof Error && err.message.includes("memory"))) {
+        setError("ZIP file is too large to process in the browser. Try zipping only your source code folder (exclude .build, node_modules, etc).");
+      } else {
+        setError(`Scan failed: ${err instanceof Error ? err.message : "Unknown error"}. Please try again.`);
+      }
       setState("error");
     }
   }, []);
