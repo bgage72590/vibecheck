@@ -9,21 +9,33 @@ const app = new Hono().basePath("/api");
 
 const SOURCE_EXTENSIONS = new Set([
   ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs",
-  ".py", ".rb", ".go", ".rs", ".java", ".php",
   ".vue", ".svelte", ".astro",
+  ".py", ".rb", ".go", ".rs", ".java", ".php",
+  ".swift", ".kt", ".kts", ".dart", ".cs",
+  ".c", ".cpp", ".h",
+  ".sh", ".bash", ".zsh",
   ".env", ".yaml", ".yml", ".toml", ".json", ".xml",
-  ".html", ".htm", ".sql", ".sh", ".bash", ".zsh",
-  ".swift", ".kt", ".kts", ".dart", ".cs", ".c", ".cpp", ".h",
+  ".html", ".htm", ".sql",
+  ".properties", ".ini", ".cfg", ".conf",
   ".tf", ".hcl", ".dockerfile",
   ".erb", ".jinja", ".j2",
-  ".gradle", ".properties", ".ini", ".cfg", ".conf",
-  ".r", ".lua", ".pl", ".pm",
-  ".ex", ".exs", ".ipynb", ".md",
+  ".gradle",
+  ".r", ".lua", ".pl", ".pm", ".ex", ".exs",
+  ".ipynb", ".md",
+  ".prisma", ".plist", ".pbxproj", ".entitlements", ".rules", ".csv",
 ]);
 
 const SOURCE_FILENAMES = new Set([
   "Dockerfile", "Makefile", "Gemfile", "Rakefile",
-  ".env.local", ".env.production", ".env.development",
+  ".env.local", ".env.production", ".env.development", ".env.example",
+  "package.json", "Cargo.toml", "go.mod", "requirements.txt", "Pipfile",
+  "next.config.js", "next.config.mjs", "next.config.ts", "vercel.json",
+  "firebase.json", ".firebaserc", "firestore.rules",
+  "app.json", "app.config.js", "eas.json",
+  "wrangler.toml", "netlify.toml",
+  "drizzle.config.ts", "drizzle.config.js",
+  "Procfile", "Caddyfile", "nginx.conf",
+  "AndroidManifest.xml",
 ]);
 
 function getSnippet(content, lineNum, context = 2) {
@@ -197,6 +209,170 @@ const rules = [
       const patterns = [/\{.*(?:isAdmin|role\s*===?\s*["'`]admin["'`]|user\.role).*&&/gi];
       for (const p of patterns) {
         matches.push(...findMatches(content, p, this, filePath, () => "Always verify permissions on the server/API side too."));
+      }
+      return matches;
+    },
+  },
+  {
+    id: "VC011", title: "Secret in NEXT_PUBLIC_ Environment Variable", severity: "critical", category: "Secrets",
+    description: "NEXT_PUBLIC_ variables are exposed to the browser. Secrets placed here are visible to anyone.",
+    check(content, filePath) {
+      if (!filePath.match(/\.env/) && !filePath.match(/next\.config/)) return [];
+      const patterns = [
+        /NEXT_PUBLIC_[A-Z_]*(?:SECRET|KEY|TOKEN|PASSWORD|PRIVATE)[A-Z_]*\s*=\s*.+/gi,
+        /NEXT_PUBLIC_[A-Z_]*(?:SUPABASE_SERVICE|CLERK_SECRET|STRIPE_SECRET)[A-Z_]*\s*=\s*.+/gi,
+      ];
+      const matches = [];
+      for (const p of patterns) {
+        matches.push(...findMatches(content, p, this, filePath, () =>
+          "Remove the NEXT_PUBLIC_ prefix. Only use NEXT_PUBLIC_ for values safe to expose in the browser."
+        ));
+      }
+      return matches;
+    },
+  },
+  {
+    id: "VC012", title: "Firebase Config with API Key in Client Code", severity: "medium", category: "Configuration",
+    description: "Firebase config objects in client code expose your API key. While Firebase API keys aren't secret, they should be restricted in the Firebase console.",
+    check(content, filePath) {
+      if (!/firebase/i.test(content)) return [];
+      const patterns = [
+        /firebaseConfig\s*=\s*\{[^}]*apiKey\s*:/gi,
+        /initializeApp\s*\(\s*\{[^}]*apiKey\s*:/gi,
+      ];
+      const matches = [];
+      for (const p of patterns) {
+        matches.push(...findMatches(content, p, this, filePath, () =>
+          "Move Firebase config to environment variables. Restrict the API key in Firebase Console > Project Settings > API restrictions."
+        ));
+      }
+      return matches;
+    },
+  },
+  {
+    id: "VC013", title: "Supabase Anon Key Used for Admin Operations", severity: "high", category: "Authorization",
+    description: "Using the Supabase anon key for operations that require elevated privileges is insecure.",
+    check(content, filePath) {
+      if (!/supabase/i.test(content)) return [];
+      if (!/anon/i.test(content)) return [];
+      const patterns = [
+        /supabase[^.]*\.auth\.admin/gi,
+        /supabase[^.]*\.rpc\s*\(/gi,
+      ];
+      const matches = [];
+      for (const p of patterns) {
+        if (/service_role/i.test(content)) continue;
+        matches.push(...findMatches(content, p, this, filePath, () =>
+          "Use the service_role key on the server side for admin operations. Never expose it to the client."
+        ));
+      }
+      return matches;
+    },
+  },
+  {
+    id: "VC014", title: ".env File Not in .gitignore", severity: "high", category: "Secrets",
+    description: "If .env is not listed in .gitignore, secrets will be committed to version control.",
+    check(content, filePath) {
+      if (!filePath.endsWith(".gitignore")) return [];
+      if (/\.env/i.test(content)) return [];
+      return [{
+        rule: "VC014", title: this.title, severity: "high", category: "Secrets",
+        file: filePath, line: 1, snippet: getSnippet(content, 1),
+        fix: 'Add ".env*" to your .gitignore file to prevent committing secrets.',
+      }];
+    },
+  },
+  {
+    id: "VC015", title: "Use of eval() or Function Constructor", severity: "high", category: "Injection",
+    description: "eval() and new Function() execute arbitrary code, creating severe injection risks. Common in AI-generated code.",
+    check(content, filePath) {
+      if (filePath.includes("node_modules") || filePath.includes(".min.")) return [];
+      const patterns = [
+        /\beval\s*\(/g,
+        /new\s+Function\s*\(/g,
+      ];
+      const matches = [];
+      for (const p of patterns) {
+        matches.push(...findMatches(content, p, this, filePath, () =>
+          "Replace eval() with JSON.parse() for data, or a proper parser for expressions. Never pass user input to eval()."
+        ));
+      }
+      return matches;
+    },
+  },
+  {
+    id: "VC016", title: "Unvalidated Redirect", severity: "high", category: "Injection",
+    description: "Redirecting users to URLs from untrusted input enables phishing attacks.",
+    check(content, filePath) {
+      const patterns = [
+        /window\.location\s*=\s*(?!["'`]https?:\/\/)/g,
+        /window\.location\.href\s*=\s*(?!["'`]https?:\/\/)/g,
+        /window\.location\.assign\s*\(\s*(?!["'`]https?:\/\/)/g,
+        /window\.location\.replace\s*\(\s*(?!["'`]https?:\/\/)/g,
+        /res\.redirect\s*\(\s*(?:req\.|params\.|query\.)/gi,
+      ];
+      const matches = [];
+      for (const p of patterns) {
+        matches.push(...findMatches(content, p, this, filePath, () =>
+          "Validate redirect URLs against an allowlist of trusted domains. Never redirect to user-supplied URLs directly."
+        ));
+      }
+      return matches;
+    },
+  },
+  {
+    id: "VC017", title: "Insecure Cookie Settings", severity: "medium", category: "Configuration",
+    description: "Cookies without httpOnly, secure, or sameSite flags are vulnerable to theft and CSRF attacks.",
+    check(content, filePath) {
+      if (!/cookie/i.test(content)) return [];
+      // Look for cookie-setting code without security flags
+      const setCookiePattern = /(?:set-cookie|setCookie|cookie\s*=|res\.cookie\s*\()/gi;
+      if (!setCookiePattern.test(content)) return [];
+      const hasHttpOnly = /httpOnly\s*:\s*true|httponly/i.test(content);
+      const hasSecure = /secure\s*:\s*true|;\s*secure/i.test(content);
+      const hasSameSite = /sameSite\s*:|samesite/i.test(content);
+      const matches = [];
+      if (!hasHttpOnly || !hasSecure || !hasSameSite) {
+        const missing = [];
+        if (!hasHttpOnly) missing.push("httpOnly");
+        if (!hasSecure) missing.push("secure");
+        if (!hasSameSite) missing.push("sameSite");
+        matches.push(...findMatches(content, /(?:set-cookie|setCookie|cookie\s*=|res\.cookie\s*\()/gi, this, filePath, () =>
+          `Add missing cookie flags: ${missing.join(", ")}. Example: { httpOnly: true, secure: true, sameSite: 'lax' }`
+        ));
+      }
+      return matches;
+    },
+  },
+  {
+    id: "VC018", title: "Exposed Clerk/Auth Secret Key", severity: "critical", category: "Secrets",
+    description: "Auth provider secret keys (Clerk, Auth0, NextAuth) must never be in client-side code or NEXT_PUBLIC_ variables.",
+    check(content, filePath) {
+      // Only check client-side files
+      const isClientFile = filePath.match(/\.(jsx|tsx|vue|svelte)$/) || /["']use client["']/.test(content);
+      const isEnvFile = filePath.match(/\.env/);
+      if (!isClientFile && !isEnvFile) return [];
+      const patterns = [];
+      if (isClientFile) {
+        patterns.push(
+          /CLERK_SECRET_KEY/g,
+          /AUTH0_CLIENT_SECRET/g,
+          /NEXTAUTH_SECRET/g,
+          /sk_(?:live|test)_[a-zA-Z0-9]{20,}/g,
+        );
+      }
+      if (isEnvFile) {
+        patterns.push(
+          /NEXT_PUBLIC_CLERK_SECRET/gi,
+          /NEXT_PUBLIC_AUTH0_SECRET/gi,
+          /NEXT_PUBLIC_NEXTAUTH_SECRET/gi,
+        );
+      }
+      const matches = [];
+      for (const p of patterns) {
+        matches.push(...findMatches(content, p, this, filePath, () =>
+          "Move this secret to a server-side environment variable (without the NEXT_PUBLIC_ prefix). Never expose auth secrets to the browser."
+        ));
       }
       return matches;
     },

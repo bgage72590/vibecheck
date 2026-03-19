@@ -3,23 +3,54 @@
 import { useState, useRef, useCallback } from "react";
 
 const ALLOWED_EXTENSIONS = new Set([
+  // Web / JS ecosystem
   ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs",
-  ".py", ".rb", ".go", ".rs", ".java", ".php",
   ".vue", ".svelte", ".astro",
+  // Backend languages
+  ".py", ".rb", ".go", ".rs", ".java", ".php",
+  // Mobile
+  ".swift", ".kt", ".kts", ".dart", ".cs",
+  // Systems
+  ".c", ".cpp", ".h",
+  // Shell
+  ".sh", ".bash", ".zsh",
+  // Config / data
   ".env", ".yaml", ".yml", ".toml", ".json", ".xml",
-  ".html", ".htm", ".sql", ".sh", ".bash", ".zsh",
-  ".swift", ".kt", ".kts", ".dart", ".cs", ".c", ".cpp", ".h",
+  ".html", ".htm", ".sql",
+  ".properties", ".ini", ".cfg", ".conf",
+  // IaC / DevOps
   ".tf", ".hcl", ".dockerfile",
+  // Templates
   ".erb", ".jinja", ".j2",
-  ".gradle", ".properties", ".ini", ".cfg", ".conf",
-  ".r", ".lua", ".pl", ".pm",
-  ".ex", ".exs", ".ipynb", ".md",
+  // Build
+  ".gradle",
+  // Other languages
+  ".r", ".lua", ".pl", ".pm", ".ex", ".exs",
+  // Notebooks / docs
+  ".ipynb", ".md",
+  // Prisma / ORM
+  ".prisma",
+  // iOS / macOS
+  ".plist", ".pbxproj", ".entitlements",
+  // Firebase
+  ".rules",
+  // Data files (PII detection)
+  ".csv",
 ]);
 
 // Files matched by name (no extension-based matching)
 const ALLOWED_FILENAMES = new Set([
   "Dockerfile", "Makefile", "Gemfile", "Rakefile",
-  ".env.local", ".env.production", ".env.development",
+  ".env.local", ".env.production", ".env.development", ".env.example",
+  "package.json", "Cargo.toml", "go.mod", "requirements.txt", "Pipfile",
+  "next.config.js", "next.config.mjs", "next.config.ts", "vercel.json",
+  "firebase.json", ".firebaserc", "firestore.rules",
+  "app.json", "app.config.js", "eas.json",
+  "wrangler.toml", "netlify.toml",
+  "tailwind.config.js", "tailwind.config.ts",
+  "drizzle.config.ts", "drizzle.config.js",
+  "Procfile", "Caddyfile", "nginx.conf",
+  "AndroidManifest.xml",
 ]);
 
 function getExtension(name: string): string {

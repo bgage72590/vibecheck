@@ -21,21 +21,33 @@ interface ScanResults {
 
 const SOURCE_EXTENSIONS = new Set([
   ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs",
-  ".py", ".rb", ".go", ".rs", ".java", ".php",
   ".vue", ".svelte", ".astro",
+  ".py", ".rb", ".go", ".rs", ".java", ".php",
+  ".swift", ".kt", ".kts", ".dart", ".cs",
+  ".c", ".cpp", ".h",
+  ".sh", ".bash", ".zsh",
   ".env", ".yaml", ".yml", ".toml", ".json", ".xml",
-  ".html", ".htm", ".sql", ".sh", ".bash", ".zsh",
-  ".swift", ".kt", ".kts", ".dart", ".cs", ".c", ".cpp", ".h",
+  ".html", ".htm", ".sql",
+  ".properties", ".ini", ".cfg", ".conf",
   ".tf", ".hcl", ".dockerfile",
   ".erb", ".jinja", ".j2",
-  ".gradle", ".properties", ".ini", ".cfg", ".conf",
-  ".r", ".lua", ".pl", ".pm",
-  ".ex", ".exs", ".ipynb", ".md",
+  ".gradle",
+  ".r", ".lua", ".pl", ".pm", ".ex", ".exs",
+  ".ipynb", ".md",
+  ".prisma", ".plist", ".pbxproj", ".entitlements", ".rules", ".csv",
 ]);
 
 const SOURCE_FILENAMES = new Set([
   "Dockerfile", "Makefile", "Gemfile", "Rakefile",
-  ".env.local", ".env.production", ".env.development",
+  ".env.local", ".env.production", ".env.development", ".env.example",
+  "package.json", "Cargo.toml", "go.mod", "requirements.txt", "Pipfile",
+  "next.config.js", "next.config.mjs", "next.config.ts", "vercel.json",
+  "firebase.json", ".firebaserc", "firestore.rules",
+  "app.json", "app.config.js", "eas.json",
+  "wrangler.toml", "netlify.toml",
+  "drizzle.config.ts", "drizzle.config.js",
+  "Procfile", "Caddyfile", "nginx.conf",
+  "AndroidManifest.xml",
 ]);
 
 // Skip directories that are never useful to scan

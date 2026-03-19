@@ -375,6 +375,231 @@ const clientSideAuth: CustomRule = {
 };
 
 // ────────────────────────────────────────────
+// VC011 – Secret in NEXT_PUBLIC_ env var
+// ────────────────────────────────────────────
+
+const nextPublicSecret: CustomRule = {
+  id: "VC011",
+  title: "Secret in NEXT_PUBLIC_ Environment Variable",
+  severity: "critical",
+  category: "Secrets",
+  description: "NEXT_PUBLIC_ variables are exposed to the browser. Secrets placed here are visible to anyone.",
+  check(content, filePath) {
+    if (!filePath.match(/\.env/) && !filePath.match(/next\.config/)) return [];
+    const patterns = [
+      /NEXT_PUBLIC_[A-Z_]*(?:SECRET|KEY|TOKEN|PASSWORD|PRIVATE)[A-Z_]*\s*=\s*.+/gi,
+      /NEXT_PUBLIC_[A-Z_]*(?:SUPABASE_SERVICE|CLERK_SECRET|STRIPE_SECRET)[A-Z_]*\s*=\s*.+/gi,
+    ];
+    const matches: RuleMatch[] = [];
+    for (const p of patterns) {
+      matches.push(...findMatches(content, p, nextPublicSecret, filePath, () =>
+        "Remove the NEXT_PUBLIC_ prefix. Only use NEXT_PUBLIC_ for values safe to expose in the browser."
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC012 – Firebase config in client code
+// ────────────────────────────────────────────
+
+const firebaseClientConfig: CustomRule = {
+  id: "VC012",
+  title: "Firebase Config with API Key in Client Code",
+  severity: "medium",
+  category: "Configuration",
+  description: "Firebase config objects in client code expose your API key. While Firebase API keys aren't secret, they should be restricted in the Firebase console.",
+  check(content, filePath) {
+    if (!/firebase/i.test(content)) return [];
+    const patterns = [
+      /firebaseConfig\s*=\s*\{[^}]*apiKey\s*:/gi,
+      /initializeApp\s*\(\s*\{[^}]*apiKey\s*:/gi,
+    ];
+    const matches: RuleMatch[] = [];
+    for (const p of patterns) {
+      matches.push(...findMatches(content, p, firebaseClientConfig, filePath, () =>
+        "Move Firebase config to environment variables. Restrict the API key in Firebase Console > Project Settings > API restrictions."
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC013 – Supabase anon key for admin ops
+// ────────────────────────────────────────────
+
+const supabaseAnonAdmin: CustomRule = {
+  id: "VC013",
+  title: "Supabase Anon Key Used for Admin Operations",
+  severity: "high",
+  category: "Authorization",
+  description: "Using the Supabase anon key for operations that require elevated privileges is insecure.",
+  check(content, filePath) {
+    if (!/supabase/i.test(content)) return [];
+    if (!/anon/i.test(content)) return [];
+    if (/service_role/i.test(content)) return [];
+    const patterns = [
+      /supabase[^.]*\.auth\.admin/gi,
+      /supabase[^.]*\.rpc\s*\(/gi,
+    ];
+    const matches: RuleMatch[] = [];
+    for (const p of patterns) {
+      matches.push(...findMatches(content, p, supabaseAnonAdmin, filePath, () =>
+        "Use the service_role key on the server side for admin operations. Never expose it to the client."
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC014 – .env not in .gitignore
+// ────────────────────────────────────────────
+
+const envNotGitignored: CustomRule = {
+  id: "VC014",
+  title: ".env File Not in .gitignore",
+  severity: "high",
+  category: "Secrets",
+  description: "If .env is not listed in .gitignore, secrets will be committed to version control.",
+  check(content, filePath) {
+    if (!filePath.endsWith(".gitignore")) return [];
+    if (/\.env/i.test(content)) return [];
+    return [{
+      rule: "VC014", title: envNotGitignored.title, severity: "high" as const, category: "Secrets",
+      file: filePath, line: 1, snippet: getSnippet(content, 1),
+      fix: 'Add ".env*" to your .gitignore file to prevent committing secrets.',
+    }];
+  },
+};
+
+// ────────────────────────────────────────────
+// VC015 – eval() / new Function()
+// ────────────────────────────────────────────
+
+const evalUsage: CustomRule = {
+  id: "VC015",
+  title: "Use of eval() or Function Constructor",
+  severity: "high",
+  category: "Injection",
+  description: "eval() and new Function() execute arbitrary code, creating severe injection risks. Common in AI-generated code.",
+  check(content, filePath) {
+    if (filePath.includes("node_modules") || filePath.includes(".min.")) return [];
+    const patterns = [
+      /\beval\s*\(/g,
+      /new\s+Function\s*\(/g,
+    ];
+    const matches: RuleMatch[] = [];
+    for (const p of patterns) {
+      matches.push(...findMatches(content, p, evalUsage, filePath, () =>
+        "Replace eval() with JSON.parse() for data, or a proper parser for expressions. Never pass user input to eval()."
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC016 – Unvalidated redirect
+// ────────────────────────────────────────────
+
+const unvalidatedRedirect: CustomRule = {
+  id: "VC016",
+  title: "Unvalidated Redirect",
+  severity: "high",
+  category: "Injection",
+  description: "Redirecting users to URLs from untrusted input enables phishing attacks.",
+  check(content, filePath) {
+    const patterns = [
+      /window\.location\s*=\s*(?!["'`]https?:\/\/)/g,
+      /window\.location\.href\s*=\s*(?!["'`]https?:\/\/)/g,
+      /window\.location\.assign\s*\(\s*(?!["'`]https?:\/\/)/g,
+      /window\.location\.replace\s*\(\s*(?!["'`]https?:\/\/)/g,
+      /res\.redirect\s*\(\s*(?:req\.|params\.|query\.)/gi,
+    ];
+    const matches: RuleMatch[] = [];
+    for (const p of patterns) {
+      matches.push(...findMatches(content, p, unvalidatedRedirect, filePath, () =>
+        "Validate redirect URLs against an allowlist of trusted domains. Never redirect to user-supplied URLs directly."
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC017 – Insecure cookie settings
+// ────────────────────────────────────────────
+
+const insecureCookies: CustomRule = {
+  id: "VC017",
+  title: "Insecure Cookie Settings",
+  severity: "medium",
+  category: "Configuration",
+  description: "Cookies without httpOnly, secure, or sameSite flags are vulnerable to theft and CSRF attacks.",
+  check(content, filePath) {
+    if (!/cookie/i.test(content)) return [];
+    const setCookiePattern = /(?:set-cookie|setCookie|cookie\s*=|res\.cookie\s*\()/gi;
+    if (!setCookiePattern.test(content)) return [];
+    const hasHttpOnly = /httpOnly\s*:\s*true|httponly/i.test(content);
+    const hasSecure = /secure\s*:\s*true|;\s*secure/i.test(content);
+    const hasSameSite = /sameSite\s*:|samesite/i.test(content);
+    const matches: RuleMatch[] = [];
+    if (!hasHttpOnly || !hasSecure || !hasSameSite) {
+      const missing: string[] = [];
+      if (!hasHttpOnly) missing.push("httpOnly");
+      if (!hasSecure) missing.push("secure");
+      if (!hasSameSite) missing.push("sameSite");
+      matches.push(...findMatches(content, /(?:set-cookie|setCookie|cookie\s*=|res\.cookie\s*\()/gi, insecureCookies, filePath, () =>
+        `Add missing cookie flags: ${missing.join(", ")}. Example: { httpOnly: true, secure: true, sameSite: 'lax' }`
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC018 – Exposed auth provider secret key
+// ────────────────────────────────────────────
+
+const exposedAuthSecret: CustomRule = {
+  id: "VC018",
+  title: "Exposed Clerk/Auth Secret Key",
+  severity: "critical",
+  category: "Secrets",
+  description: "Auth provider secret keys (Clerk, Auth0, NextAuth) must never be in client-side code or NEXT_PUBLIC_ variables.",
+  check(content, filePath) {
+    const isClientFile = filePath.match(/\.(jsx|tsx|vue|svelte)$/) || /["']use client["']/.test(content);
+    const isEnvFile = filePath.match(/\.env/);
+    if (!isClientFile && !isEnvFile) return [];
+    const patterns: RegExp[] = [];
+    if (isClientFile) {
+      patterns.push(
+        /CLERK_SECRET_KEY/g,
+        /AUTH0_CLIENT_SECRET/g,
+        /NEXTAUTH_SECRET/g,
+      );
+    }
+    if (isEnvFile) {
+      patterns.push(
+        /NEXT_PUBLIC_CLERK_SECRET/gi,
+        /NEXT_PUBLIC_AUTH0_SECRET/gi,
+        /NEXT_PUBLIC_NEXTAUTH_SECRET/gi,
+      );
+    }
+    const matches: RuleMatch[] = [];
+    for (const p of patterns) {
+      matches.push(...findMatches(content, p, exposedAuthSecret, filePath, () =>
+        "Move this secret to a server-side environment variable (without the NEXT_PUBLIC_ prefix). Never expose auth secrets to the browser."
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
 // EXPORT ALL RULES
 // ────────────────────────────────────────────
 
@@ -389,6 +614,14 @@ export const allRules: CustomRule[] = [
   noRateLimiting,
   corsWildcard,
   clientSideAuth,
+  nextPublicSecret,
+  firebaseClientConfig,
+  supabaseAnonAdmin,
+  envNotGitignored,
+  evalUsage,
+  unvalidatedRedirect,
+  insecureCookies,
+  exposedAuthSecret,
 ];
 
 export function runCustomRules(
