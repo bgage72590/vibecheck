@@ -154,14 +154,14 @@ export function UploadZone({ onFilesSelected, disabled }: UploadZoneProps) {
         ref={fileInputRef}
         type="file"
         multiple
-        className="hidden"
+        className="sr-only"
         onChange={handleFileInput}
       />
       <input
         ref={zipInputRef}
         type="file"
         accept=".zip"
-        className="hidden"
+        className="sr-only"
         onChange={handleZipInput}
       />
 
