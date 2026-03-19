@@ -36,8 +36,35 @@ const SOURCE_EXTENSIONS = [
   "yaml",
   "yml",
   "json",
+  "xml",
   "toml",
   "sql",
+  "tf",
+  "hcl",
+  "dockerfile",
+  "erb",
+  "jinja",
+  "j2",
+  "gradle",
+  "properties",
+  "ini",
+  "cfg",
+  "conf",
+  "r",
+  "lua",
+  "pl",
+  "pm",
+  "ex",
+  "exs",
+  "ipynb",
+  "md",
+];
+
+const SOURCE_FILENAMES = [
+  "Dockerfile",
+  "Makefile",
+  "Gemfile",
+  "Rakefile",
 ];
 
 const ALWAYS_IGNORE = [
@@ -78,6 +105,10 @@ export async function collectFiles(directory: string): Promise<string[]> {
   const patterns = SOURCE_EXTENSIONS.map((ext) => `**/*.${ext}`);
   // Also grab dotfiles like .env, .env.local, etc.
   patterns.push("**/.env*");
+  // Also grab files matched by name (Dockerfile, Makefile, etc.)
+  for (const name of SOURCE_FILENAMES) {
+    patterns.push(`**/${name}`);
+  }
 
   const files = await fg(patterns, {
     cwd: directory,

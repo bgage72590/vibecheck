@@ -11,9 +11,19 @@ const SOURCE_EXTENSIONS = new Set([
   ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs",
   ".py", ".rb", ".go", ".rs", ".java", ".php",
   ".vue", ".svelte", ".astro",
-  ".env", ".yaml", ".yml", ".toml", ".json",
+  ".env", ".yaml", ".yml", ".toml", ".json", ".xml",
   ".html", ".htm", ".sql", ".sh", ".bash", ".zsh",
   ".swift", ".kt", ".kts", ".dart", ".cs", ".c", ".cpp", ".h",
+  ".tf", ".hcl", ".dockerfile",
+  ".erb", ".jinja", ".j2",
+  ".gradle", ".properties", ".ini", ".cfg", ".conf",
+  ".r", ".lua", ".pl", ".pm",
+  ".ex", ".exs", ".ipynb", ".md",
+]);
+
+const SOURCE_FILENAMES = new Set([
+  "Dockerfile", "Makefile", "Gemfile", "Rakefile",
+  ".env.local", ".env.production", ".env.development",
 ]);
 
 function getSnippet(content, lineNum, context = 2) {
@@ -304,9 +314,10 @@ app.post("/scans/upload", async (c) => {
         // Skip nested ZIPs
         if (path.endsWith(".zip")) continue;
 
-        // Extension filter
+        // Extension or filename filter
         const ext = "." + path.split(".").pop().toLowerCase();
-        if (!SOURCE_EXTENSIONS.has(ext)) continue;
+        const baseName = path.split("/").pop() || "";
+        if (!SOURCE_EXTENSIONS.has(ext) && !SOURCE_FILENAMES.has(baseName)) continue;
 
         // Decode to string (skip binary)
         try {
@@ -346,7 +357,7 @@ app.post("/scans/upload", async (c) => {
 
         const fileName = file.name || "unknown";
         const ext = "." + fileName.split(".").pop().toLowerCase();
-        if (!SOURCE_EXTENSIONS.has(ext)) continue;
+        if (!SOURCE_EXTENSIONS.has(ext) && !SOURCE_FILENAMES.has(fileName)) continue;
 
         // Path traversal protection
         if (fileName.includes("..") || fileName.startsWith("/")) continue;

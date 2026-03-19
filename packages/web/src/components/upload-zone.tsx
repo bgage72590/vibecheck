@@ -6,9 +6,20 @@ const ALLOWED_EXTENSIONS = new Set([
   ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs",
   ".py", ".rb", ".go", ".rs", ".java", ".php",
   ".vue", ".svelte", ".astro",
-  ".env", ".yaml", ".yml", ".toml", ".json",
+  ".env", ".yaml", ".yml", ".toml", ".json", ".xml",
   ".html", ".htm", ".sql", ".sh", ".bash", ".zsh",
   ".swift", ".kt", ".kts", ".dart", ".cs", ".c", ".cpp", ".h",
+  ".tf", ".hcl", ".dockerfile",
+  ".erb", ".jinja", ".j2",
+  ".gradle", ".properties", ".ini", ".cfg", ".conf",
+  ".r", ".lua", ".pl", ".pm",
+  ".ex", ".exs", ".ipynb", ".md",
+]);
+
+// Files matched by name (no extension-based matching)
+const ALLOWED_FILENAMES = new Set([
+  "Dockerfile", "Makefile", "Gemfile", "Rakefile",
+  ".env.local", ".env.production", ".env.development",
 ]);
 
 function getExtension(name: string): string {
@@ -62,7 +73,7 @@ export function UploadZone({ onFilesSelected, disabled }: UploadZoneProps) {
     }
 
     // Filter to source files
-    const sourceFiles = droppedFiles.filter(f => ALLOWED_EXTENSIONS.has(getExtension(f.name)));
+    const sourceFiles = droppedFiles.filter(f => ALLOWED_EXTENSIONS.has(getExtension(f.name)) || ALLOWED_FILENAMES.has(f.name));
     if (sourceFiles.length > 0) {
       setSelectedFiles(sourceFiles);
       setIsZip(false);
@@ -72,7 +83,7 @@ export function UploadZone({ onFilesSelected, disabled }: UploadZoneProps) {
   const handleFileInput = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files) return;
     const files = Array.from(e.target.files);
-    const sourceFiles = files.filter(f => ALLOWED_EXTENSIONS.has(getExtension(f.name)));
+    const sourceFiles = files.filter(f => ALLOWED_EXTENSIONS.has(getExtension(f.name)) || ALLOWED_FILENAMES.has(f.name));
     if (sourceFiles.length > 0) {
       setSelectedFiles(sourceFiles);
       setIsZip(false);

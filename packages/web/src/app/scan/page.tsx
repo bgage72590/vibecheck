@@ -23,9 +23,19 @@ const SOURCE_EXTENSIONS = new Set([
   ".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs",
   ".py", ".rb", ".go", ".rs", ".java", ".php",
   ".vue", ".svelte", ".astro",
-  ".env", ".yaml", ".yml", ".toml", ".json",
+  ".env", ".yaml", ".yml", ".toml", ".json", ".xml",
   ".html", ".htm", ".sql", ".sh", ".bash", ".zsh",
   ".swift", ".kt", ".kts", ".dart", ".cs", ".c", ".cpp", ".h",
+  ".tf", ".hcl", ".dockerfile",
+  ".erb", ".jinja", ".j2",
+  ".gradle", ".properties", ".ini", ".cfg", ".conf",
+  ".r", ".lua", ".pl", ".pm",
+  ".ex", ".exs", ".ipynb", ".md",
+]);
+
+const SOURCE_FILENAMES = new Set([
+  "Dockerfile", "Makefile", "Gemfile", "Rakefile",
+  ".env.local", ".env.production", ".env.development",
 ]);
 
 // Skip directories that are never useful to scan
@@ -97,8 +107,9 @@ export default function ScanPage() {
           if (shouldSkipPath(path)) continue;
           // Skip path traversal
           if (path.includes("..") || path.startsWith("/")) continue;
-          // Check extension BEFORE decoding
-          if (!SOURCE_EXTENSIONS.has(getExt(path))) continue;
+          // Check extension or filename BEFORE decoding
+          const fileName = path.split("/").pop() || "";
+          if (!SOURCE_EXTENSIONS.has(getExt(path)) && !SOURCE_FILENAMES.has(fileName)) continue;
           // Skip large files (>500KB is probably not source code)
           if (data.length > 500 * 1024) continue;
 
