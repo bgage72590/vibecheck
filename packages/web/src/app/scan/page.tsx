@@ -1,13 +1,30 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { UploadZone } from "@/components/upload-zone";
 import { StatCard } from "@/components/stat-card";
 import { FindingCard } from "@/components/finding-card";
 import type { Finding } from "@/lib/demo-data";
 import Link from "next/link";
+import { saveScanResult, getScanHistory, clearScanHistory, type ScanHistoryEntry } from "@/lib/scan-history";
 
 type ScanState = "idle" | "extracting" | "scanning" | "results" | "error";
+type InputMode = "upload" | "diff";
+
+const GRADE_PERCENTILES: Record<string, number> = { "A+": 98, "A": 90, "B": 70, "C": 45, "D": 20, "F": 5 };
+
+const OWASP_TOP_10 = [
+  { id: "A01:2021", name: "Broken Access Control" },
+  { id: "A02:2021", name: "Cryptographic Failures" },
+  { id: "A03:2021", name: "Injection" },
+  { id: "A04:2021", name: "Insecure Design" },
+  { id: "A05:2021", name: "Security Misconfiguration" },
+  { id: "A06:2021", name: "Vulnerable Components" },
+  { id: "A07:2021", name: "Auth Failures" },
+  { id: "A08:2021", name: "Data Integrity" },
+  { id: "A09:2021", name: "Logging Failures" },
+  { id: "A10:2021", name: "SSRF" },
+];
 
 interface ScanResults {
   findings: Finding[];
@@ -22,6 +39,7 @@ interface ScanResults {
   gradeSummary?: string;
   frameworks?: string[];
   totalRules?: number;
+  percentile?: number;
 }
 
 const SOURCE_EXTENSIONS = new Set([
@@ -88,11 +106,39 @@ function shouldSkipPath(path: string, ignorePatterns: string[] = []): boolean {
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://vibecheck-api-gs4b.vercel.app";
 
+function parseDiffToFiles(diff: string): { path: string; content: string }[] {
+  const files: { path: string; content: string }[] = [];
+  const chunks = diff.split(/^diff --git /m).filter(Boolean);
+  for (const chunk of chunks) {
+    const pathMatch = chunk.match(/\+\+\+ b\/(.+)/);
+    if (!pathMatch) continue;
+    const filePath = pathMatch[1];
+    const lines: string[] = [];
+    const hunkParts = chunk.split(/^@@[^@]+@@/m).slice(1);
+    for (const hunk of hunkParts) {
+      for (const line of hunk.split("\n")) {
+        if (line.startsWith("+") && !line.startsWith("+++")) {
+          lines.push(line.substring(1));
+        } else if (!line.startsWith("-") && !line.startsWith("\\")) {
+          lines.push(line.startsWith(" ") ? line.substring(1) : line);
+        }
+      }
+    }
+    if (lines.length > 0) {
+      files.push({ path: filePath, content: lines.join("\n") });
+    }
+  }
+  return files;
+}
+
 export default function ScanPage() {
   const [state, setState] = useState<ScanState>("idle");
   const [results, setResults] = useState<ScanResults | null>(null);
   const [error, setError] = useState<string>("");
   const [statusMessage, setStatusMessage] = useState("");
+  const [inputMode, setInputMode] = useState<InputMode>("upload");
+  const [diffText, setDiffText] = useState("");
+  const [history, setHistory] = useState<ScanHistoryEntry[]>([]);
 
   const handleFilesSelected = useCallback(async (files: File[], isZip: boolean) => {
     setError("");
@@ -220,11 +266,75 @@ export default function ScanPage() {
     }
   }, []);
 
+  // Load scan history from localStorage
+  useEffect(() => {
+    setHistory(getScanHistory());
+  }, []);
+
+  // Save results to history when scan completes
+  useEffect(() => {
+    if (state === "results" && results && results.grade) {
+      saveScanResult({
+        timestamp: new Date().toISOString(),
+        grade: results.grade,
+        score: results.score ?? 0,
+        findingsCount: results.findings.length,
+        criticalCount: results.criticalCount,
+        highCount: results.highCount,
+        mediumCount: results.mediumCount,
+        filesScanned: results.filesScanned,
+      });
+      setHistory(getScanHistory());
+    }
+  }, [state, results]);
+
+  const handleDiffScan = useCallback(async () => {
+    if (!diffText.trim()) {
+      setError("Please paste a git diff first.");
+      setState("error");
+      return;
+    }
+    setError("");
+    setState("scanning");
+    setStatusMessage("Parsing diff and scanning...");
+
+    try {
+      const files = parseDiffToFiles(diffText);
+      if (files.length === 0) {
+        setError("No files found in the diff. Make sure you paste a valid git diff output.");
+        setState("error");
+        return;
+      }
+
+      setStatusMessage(`Found ${files.length} changed files. Scanning...`);
+
+      const response = await fetch(`${API_URL}/api/scans/upload-json`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ files }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        setError(data.error || "Scan failed.");
+        setState("error");
+        return;
+      }
+
+      setResults(data);
+      setState("results");
+    } catch (err) {
+      setError(`Diff scan failed: ${err instanceof Error ? err.message : "Unknown error"}`);
+      setState("error");
+    }
+  }, [diffText]);
+
   const handleReset = useCallback(() => {
     setState("idle");
     setResults(null);
     setError("");
     setStatusMessage("");
+    setDiffText("");
   }, []);
 
   const [copyLabel, setCopyLabel] = useState("Copy as AI Prompt");
@@ -343,10 +453,55 @@ export default function ScanPage() {
         </div>
       </div>
 
-      {/* Upload zone (shown in idle state) */}
+      {/* Input mode tabs */}
       {(state === "idle" || state === "error") && (
         <>
-          <UploadZone onFilesSelected={handleFilesSelected} disabled={false} />
+          <div className="flex gap-2 mb-4">
+            <button
+              type="button"
+              onClick={() => setInputMode("upload")}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                inputMode === "upload" ? "bg-cyan-600 text-white" : "bg-[#1a1a2e] text-gray-400 hover:text-white"
+              }`}
+            >
+              Upload Files
+            </button>
+            <button
+              type="button"
+              onClick={() => setInputMode("diff")}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                inputMode === "diff" ? "bg-cyan-600 text-white" : "bg-[#1a1a2e] text-gray-400 hover:text-white"
+              }`}
+            >
+              Paste Diff
+            </button>
+          </div>
+
+          {inputMode === "upload" && (
+            <UploadZone onFilesSelected={handleFilesSelected} disabled={false} />
+          )}
+
+          {inputMode === "diff" && (
+            <div className="bg-[#1a1a2e] rounded-xl p-6 border-2 border-dashed border-gray-700">
+              <p className="text-gray-400 text-sm mb-3">
+                Paste your <code className="text-cyan-400">git diff</code> output to scan only changed code:
+              </p>
+              <textarea
+                value={diffText}
+                onChange={(e) => setDiffText(e.target.value)}
+                className="w-full h-64 bg-[#12121f] rounded-lg p-4 font-mono text-sm text-gray-300 border border-gray-700 focus:border-cyan-500 focus:outline-none resize-y"
+                placeholder="$ git diff main&#10;&#10;diff --git a/src/app.ts b/src/app.ts&#10;--- a/src/app.ts&#10;+++ b/src/app.ts&#10;@@ -1,3 +1,5 @@&#10; import express from 'express';&#10;+const secret = 'sk_live_abc123';&#10;..."
+              />
+              <button
+                type="button"
+                onClick={handleDiffScan}
+                disabled={!diffText.trim()}
+                className="mt-3 px-6 py-2 bg-cyan-600 hover:bg-cyan-500 disabled:bg-gray-700 disabled:text-gray-500 rounded-lg text-sm font-medium transition-colors"
+              >
+                Scan Diff
+              </button>
+            </div>
+          )}
 
           {state === "error" && (
             <div className="mt-4 bg-red-900/20 border border-red-800 rounded-xl p-4 text-red-400">
@@ -373,44 +528,57 @@ export default function ScanPage() {
       {state === "results" && results && (
         <div className="space-y-6">
           {/* Grade banner */}
-          {results.grade && (
-            <div className={`rounded-xl p-6 flex items-center gap-6 ${
-              results.grade === "A+" || results.grade === "A" ? "bg-green-900/20 border border-green-800" :
-              results.grade === "B" ? "bg-cyan-900/20 border border-cyan-800" :
-              results.grade === "C" ? "bg-yellow-900/20 border border-yellow-800" :
-              "bg-red-900/20 border border-red-800"
-            }`}>
-              <div className={`text-5xl font-black ${
-                results.grade === "A+" || results.grade === "A" ? "text-green-400" :
-                results.grade === "B" ? "text-cyan-400" :
-                results.grade === "C" ? "text-yellow-400" :
-                "text-red-400"
+          {results.grade && (() => {
+            const percentile = results.percentile ?? GRADE_PERCENTILES[results.grade] ?? 50;
+            const prevEntry = history.length >= 2 ? history[history.length - 2] : null;
+            const scoreDiff = prevEntry && results.score != null ? results.score - prevEntry.score : null;
+            return (
+              <div className={`rounded-xl p-6 flex items-center gap-6 ${
+                results.grade === "A+" || results.grade === "A" ? "bg-green-900/20 border border-green-800" :
+                results.grade === "B" ? "bg-cyan-900/20 border border-cyan-800" :
+                results.grade === "C" ? "bg-yellow-900/20 border border-yellow-800" :
+                "bg-red-900/20 border border-red-800"
               }`}>
-                {results.grade}
-              </div>
-              <div className="flex-1">
-                <div className="flex items-center gap-3 mb-1">
-                  <span className="text-lg font-semibold">Security Grade</span>
-                  <span className="text-gray-500 text-sm">{results.score}/100</span>
+                <div className={`text-5xl font-black ${
+                  results.grade === "A+" || results.grade === "A" ? "text-green-400" :
+                  results.grade === "B" ? "text-cyan-400" :
+                  results.grade === "C" ? "text-yellow-400" :
+                  "text-red-400"
+                }`}>
+                  {results.grade}
+                  {scoreDiff !== null && scoreDiff !== 0 && (
+                    <span className={`text-lg ml-1 ${scoreDiff > 0 ? "text-green-400" : "text-red-400"}`}>
+                      {scoreDiff > 0 ? "^" : "v"}
+                    </span>
+                  )}
                 </div>
-                <p className="text-gray-400 text-sm">{results.gradeSummary}</p>
-                {results.frameworks && results.frameworks.length > 0 && (
-                  <div className="flex gap-2 mt-2">
-                    {results.frameworks.map((fw) => (
-                      <span key={fw} className="px-2 py-0.5 bg-gray-700/50 rounded text-xs text-gray-300">
-                        {fw}
-                      </span>
-                    ))}
-                    {results.totalRules && (
-                      <span className="px-2 py-0.5 bg-gray-700/50 rounded text-xs text-gray-300">
-                        {results.totalRules} rules
-                      </span>
-                    )}
+                <div className="flex-1">
+                  <div className="flex items-center gap-3 mb-1">
+                    <span className="text-lg font-semibold">Security Grade</span>
+                    <span className="text-gray-500 text-sm">{results.score}/100</span>
                   </div>
-                )}
+                  <p className="text-gray-400 text-sm">{results.gradeSummary}</p>
+                  <p className="text-gray-500 text-xs mt-1">
+                    More secure than {percentile}% of projects scanned
+                  </p>
+                  {results.frameworks && results.frameworks.length > 0 && (
+                    <div className="flex flex-wrap gap-2 mt-2">
+                      {results.frameworks.map((fw) => (
+                        <span key={fw} className="px-2 py-0.5 bg-gray-700/50 rounded text-xs text-gray-300">
+                          {fw}
+                        </span>
+                      ))}
+                      {results.totalRules && (
+                        <span className="px-2 py-0.5 bg-gray-700/50 rounded text-xs text-gray-300">
+                          {results.totalRules} rules
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* Summary stats */}
           <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
@@ -483,6 +651,58 @@ export default function ScanPage() {
             )}
           </div>
 
+          {/* OWASP Top 10 Compliance Summary */}
+          {results.findings.length > 0 && results.findings.some(f => f.owasp) && (
+            <div className="bg-[#1a1a2e] rounded-xl p-4">
+              <h3 className="text-sm font-semibold mb-3">OWASP Top 10 (2021) Coverage</h3>
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                {OWASP_TOP_10.map((cat) => {
+                  const count = results.findings.filter(f => f.owasp === cat.id).length;
+                  return (
+                    <div key={cat.id} className={`rounded-lg p-2 text-center text-xs ${
+                      count > 0 ? "bg-red-900/20 border border-red-900/30" : "bg-green-900/20 border border-green-900/30"
+                    }`}>
+                      <div className={`font-bold ${count > 0 ? "text-red-400" : "text-green-400"}`}>
+                        {count > 0 ? count : "OK"}
+                      </div>
+                      <div className="text-gray-500 mt-0.5 leading-tight">{cat.name}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Scan History */}
+          {history.length >= 2 && (
+            <div className="bg-[#1a1a2e] rounded-xl p-4">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-semibold">Score History</h3>
+                <button
+                  type="button"
+                  onClick={() => { clearScanHistory(); setHistory([]); }}
+                  className="text-xs text-gray-500 hover:text-gray-400"
+                >
+                  Clear
+                </button>
+              </div>
+              <div className="flex items-end gap-1 h-20">
+                {history.map((entry, i) => (
+                  <div key={i} className="flex-1 flex flex-col items-center gap-1">
+                    <div
+                      className={`w-full rounded-t ${
+                        entry.score >= 85 ? "bg-green-500" : entry.score >= 70 ? "bg-cyan-500" : entry.score >= 55 ? "bg-yellow-500" : "bg-red-500"
+                      }`}
+                      style={{ height: `${Math.max(entry.score * 0.8, 4)}px` }}
+                      title={`${entry.grade} (${entry.score}/100) — ${new Date(entry.timestamp).toLocaleDateString()}`}
+                    />
+                    <span className="text-[10px] text-gray-500">{entry.grade}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* No findings message */}
           {results.findings.length === 0 && (
             <div className="bg-green-900/20 border border-green-800 rounded-xl p-8 text-center">
@@ -526,7 +746,7 @@ export default function ScanPage() {
             </div>
             <div>
               <div className="text-cyan-400 font-medium mb-1">2. Scan</div>
-              <p>Our engine runs 78 security rules checking for hardcoded secrets, SQL injection, XSS, SSRF, NoSQL injection, weak crypto, Electron misconfigs, Docker/K8s security, CI/CD vulnerabilities, and more.</p>
+              <p>Our engine runs 96 security rules checking for hardcoded secrets, SQL injection, XSS, SSRF, NoSQL injection, XXE, SSTI, command injection, weak crypto, Docker/K8s security, CI/CD vulnerabilities, and more.</p>
             </div>
             <div>
               <div className="text-cyan-400 font-medium mb-1">3. Fix</div>

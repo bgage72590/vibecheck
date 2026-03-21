@@ -59,6 +59,22 @@ export async function scanCommand(
     process.exit(1);
   }
 
+  // Diff mode: filter to only changed files
+  if (options.diff) {
+    const base = typeof options.diff === "string" ? options.diff : "main";
+    try {
+      const { execSync } = await import("node:child_process");
+      const changedFiles = execSync(`git diff --name-only ${base}`, { cwd: dir, encoding: "utf-8" })
+        .trim().split("\n").filter(Boolean);
+      files = files.filter(f => changedFiles.some(cf => f.endsWith(cf) || cf.endsWith(f)));
+      if (!isSilent) {
+        spinner.info(chalk.gray(`  Diff mode: scanning ${files.length} changed files vs ${base}`));
+      }
+    } catch {
+      spinner.warn("Could not run git diff — scanning all files");
+    }
+  }
+
   if (files.length === 0) {
     spinner.warn("No source files found in this directory");
     return;

@@ -21,8 +21,11 @@ export interface Finding {
   line: number;
   snippet: string;
   fix?: string;
+  fixCode?: { before: string; after: string };
   category: string;
   source: "custom" | "semgrep" | "gitleaks" | "ai";
+  owasp?: string;
+  cwe?: string;
 }
 
 export const demoScans: ScanSummary[] = [

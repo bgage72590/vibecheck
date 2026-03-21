@@ -11,8 +11,11 @@ export interface Finding {
   column?: number;
   snippet: string;
   fix?: string;
+  fixCode?: { before: string; after: string };
   category: string;
   source: "custom" | "semgrep" | "gitleaks" | "ai";
+  owasp?: string;
+  cwe?: string;
 }
 
 export interface ScanResult {
@@ -28,6 +31,7 @@ export interface ScanOptions {
   aiAnalysis: boolean;
   format: "terminal" | "json" | "sarif";
   verbose: boolean;
+  diff?: string | boolean;
 }
 
 export interface RuleMatch {

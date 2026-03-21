@@ -2367,6 +2367,576 @@ export function calculateGrade(findings: Finding[], totalFiles: number): GradeRe
 }
 
 // ────────────────────────────────────────────
+// VC079 – JWT Algorithm Confusion
+// ────────────────────────────────────────────
+
+const jwtAlgConfusion: CustomRule = {
+  id: "VC079",
+  title: "JWT Algorithm Confusion (alg:none)",
+  severity: "critical",
+  category: "Authentication",
+  description: "Accepting 'none' as a JWT algorithm allows attackers to forge tokens by removing the signature entirely.",
+  check(content, filePath) {
+    if (!/jwt|jsonwebtoken|jose/i.test(content)) return [];
+    const matches: RuleMatch[] = [];
+    const patterns = [
+      /algorithms\s*:\s*\[.*["']none["']/gi,
+      /algorithm\s*[:=]\s*["']none["']/gi,
+    ];
+    for (const p of patterns) {
+      matches.push(...findMatches(content, p, jwtAlgConfusion, filePath, () =>
+        "Never allow algorithm 'none'. Explicitly specify: algorithms: ['RS256'] or algorithms: ['HS256']. Reject tokens with alg:none."
+      ));
+    }
+    // Also check for missing algorithm restriction
+    if (/jwt\.verify\s*\([^)]*\)\s*(?!.*algorithms)/i.test(content) && !/algorithms/i.test(content)) {
+      matches.push(...findMatches(content, /jwt\.verify\s*\(/g, jwtAlgConfusion, filePath, () =>
+        "Specify allowed algorithms in jwt.verify: jwt.verify(token, secret, { algorithms: ['HS256'] })."
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC080 – Regex DoS (ReDoS)
+// ────────────────────────────────────────────
+
+const regexDos: CustomRule = {
+  id: "VC080",
+  title: "Potential Regular Expression DoS (ReDoS)",
+  severity: "high",
+  category: "Availability",
+  description: "Nested quantifiers like (a+)+ or (a*){2,} cause catastrophic backtracking, allowing attackers to freeze your server with crafted input.",
+  check(content, filePath) {
+    if (filePath.includes("test") || filePath.includes("mock")) return [];
+    const matches: RuleMatch[] = [];
+    // Detect nested quantifiers in regex
+    const patterns = [
+      /new\s+RegExp\s*\(\s*["'`].*\([^)]*[+*]\)[+*{]/g,
+      /\/.*\([^)]*[+*]\)[+*{].*\//g,
+    ];
+    for (const p of patterns) {
+      matches.push(...findMatches(content, p, regexDos, filePath, () =>
+        "Avoid nested quantifiers in regex. Use atomic groups, possessive quantifiers, or the 're2' library for safe regex execution."
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC081 – XML External Entity (XXE)
+// ────────────────────────────────────────────
+
+const xxeVulnerability: CustomRule = {
+  id: "VC081",
+  title: "XML External Entity (XXE) Injection",
+  severity: "critical",
+  category: "Injection",
+  description: "XML parsers that process external entities allow attackers to read files, perform SSRF, or cause DoS via billion-laughs attacks.",
+  check(content, filePath) {
+    if (!/xml|parseXML|DOMParser|SAXParser|etree|lxml/i.test(content)) return [];
+    const matches: RuleMatch[] = [];
+    const patterns = [
+      /\.parseXML\s*\(/g,
+      /new\s+DOMParser\s*\(\)/g,
+      /etree\.parse\s*\(/g,
+      /lxml\.etree/g,
+      /SAXParserFactory/g,
+      /XMLReaderFactory/g,
+    ];
+    const hasProtection = /noent.*false|resolveExternals.*false|FEATURE_EXTERNAL.*false|defusedxml|disallow-doctype-decl/i.test(content);
+    if (hasProtection) return [];
+    for (const p of patterns) {
+      matches.push(...findMatches(content, p, xxeVulnerability, filePath, () =>
+        "Disable external entities: set noent: false, or use defusedxml (Python). For Java: factory.setFeature('http://apache.org/xml/features/disallow-doctype-decl', true)."
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC082 – Server-Side Template Injection
+// ────────────────────────────────────────────
+
+const ssti: CustomRule = {
+  id: "VC082",
+  title: "Server-Side Template Injection (SSTI)",
+  severity: "critical",
+  category: "Injection",
+  description: "Rendering templates from user-controlled strings allows attackers to execute arbitrary code on the server.",
+  check(content, filePath) {
+    if (filePath.includes("test") || filePath.includes("mock")) return [];
+    const matches: RuleMatch[] = [];
+    const patterns = [
+      /render_template_string\s*\(\s*(?!["'`])/g,
+      /Template\s*\(\s*(?:req\.|body\.|input|params|args|user)/gi,
+      /engine\.render\s*\(\s*(?:req\.|body\.|input)/gi,
+      /nunjucks\.renderString\s*\(\s*(?:req\.|body\.|input)/gi,
+      /ejs\.render\s*\(\s*(?:req\.|body\.|input)/gi,
+    ];
+    for (const p of patterns) {
+      matches.push(...findMatches(content, p, ssti, filePath, () =>
+        "Never render templates from user input. Use pre-defined templates and pass data as context variables: render_template('template.html', data=user_data)."
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC083 – Insecure Java Deserialization
+// ────────────────────────────────────────────
+
+const javaDeserialization: CustomRule = {
+  id: "VC083",
+  title: "Insecure Java Deserialization",
+  severity: "critical",
+  category: "Injection",
+  description: "ObjectInputStream.readObject() on untrusted data allows arbitrary code execution via gadget chains in the classpath.",
+  check(content, filePath) {
+    if (!filePath.match(/\.java$|\.kt$/)) return [];
+    const matches: RuleMatch[] = [];
+    const patterns = [
+      /ObjectInputStream\s*\(/g,
+      /\.readObject\s*\(\)/g,
+      /XMLDecoder\s*\(/g,
+      /XStream\s*\(\)/g,
+    ];
+    const hasSafe = /ValidatingObjectInputStream|ObjectInputFilter|SerialKiller|NotSerializableException/i.test(content);
+    if (hasSafe) return [];
+    for (const p of patterns) {
+      matches.push(...findMatches(content, p, javaDeserialization, filePath, () =>
+        "Use ValidatingObjectInputStream with an allowlist of classes, or avoid Java serialization entirely. Use JSON instead."
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC084 – Missing Subresource Integrity (SRI)
+// ────────────────────────────────────────────
+
+const missingSRI: CustomRule = {
+  id: "VC084",
+  title: "Missing Subresource Integrity (SRI)",
+  severity: "medium",
+  category: "Configuration",
+  description: "External scripts and stylesheets loaded without integrity= attributes can be tampered with if the CDN is compromised.",
+  check(content, filePath) {
+    if (!filePath.match(/\.(html|htm|jsx|tsx|ejs|hbs)$/)) return [];
+    const matches: RuleMatch[] = [];
+    // Script tags with external src but no integrity
+    const scriptPattern = /<script\s+[^>]*src\s*=\s*["']https?:\/\/[^"']+["'][^>]*>/gi;
+    let m: RegExpExecArray | null;
+    const re = new RegExp(scriptPattern.source, scriptPattern.flags);
+    while ((m = re.exec(content)) !== null) {
+      if (!m[0].includes("integrity")) {
+        const lineNum = content.substring(0, m.index).split("\n").length;
+        matches.push({
+          rule: "VC084", title: missingSRI.title, severity: "medium", category: "Configuration",
+          file: filePath, line: lineNum, snippet: getSnippet(content, lineNum),
+          fix: 'Add integrity and crossorigin attributes: <script src="..." integrity="sha384-..." crossorigin="anonymous">'
+        });
+      }
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC085 – Exposed Admin/Debug Routes
+// ────────────────────────────────────────────
+
+const exposedAdminRoutes: CustomRule = {
+  id: "VC085",
+  title: "Exposed Admin or Debug Route",
+  severity: "high",
+  category: "Information Leakage",
+  description: "Routes like /admin, /debug, /phpinfo, or /actuator without authentication expose sensitive controls and information to attackers.",
+  check(content, filePath) {
+    if (!/(?:\/api\/|routes?\/|server\.|app\.|index\.[jt]s)/i.test(filePath)) return [];
+    const matches: RuleMatch[] = [];
+    const patterns = [
+      /[.'"]\s*(?:get|use|all)\s*\(\s*["'`]\/(?:admin|debug|_debug|__debug__|phpinfo|actuator|graphiql|playground|swagger)["'`]/gi,
+    ];
+    const hasAuth = /auth|requireAuth|isAdmin|requireAdmin|authenticate|middleware.*admin/i.test(content);
+    if (hasAuth) return [];
+    for (const p of patterns) {
+      matches.push(...findMatches(content, p, exposedAdminRoutes, filePath, () =>
+        "Protect admin/debug routes with authentication middleware. In production, disable debug endpoints entirely."
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC086 – Insecure WebSocket
+// ────────────────────────────────────────────
+
+const insecureWebSocket: CustomRule = {
+  id: "VC086",
+  title: "Insecure WebSocket Connection (ws://)",
+  severity: "medium",
+  category: "Configuration",
+  description: "Using ws:// instead of wss:// transmits data in plaintext, vulnerable to eavesdropping and man-in-the-middle attacks.",
+  check(content, filePath) {
+    if (filePath.includes("test") || filePath.includes("mock")) return [];
+    return findMatches(content, /new\s+WebSocket\s*\(\s*["'`]ws:\/\//g, insecureWebSocket, filePath, () =>
+      "Use wss:// (WebSocket Secure) instead of ws:// for encrypted connections: new WebSocket('wss://...')."
+    );
+  },
+};
+
+// ────────────────────────────────────────────
+// VC087 – Missing HSTS
+// ────────────────────────────────────────────
+
+const missingHSTS: CustomRule = {
+  id: "VC087",
+  title: "Missing HTTP Strict Transport Security (HSTS)",
+  severity: "medium",
+  category: "Configuration",
+  description: "Without HSTS headers, browsers allow downgrade attacks from HTTPS to HTTP, exposing traffic to interception.",
+  check(content, filePath) {
+    if (!/(?:server|app|index|main)\.[jt]sx?$/.test(filePath)) return [];
+    if (!/(?:express|hono|fastify|koa)/i.test(content)) return [];
+    if (/Strict-Transport-Security|hsts|helmet/i.test(content)) return [];
+    return findMatches(content, /(?:express|hono|fastify|koa)\s*\(/gi, missingHSTS, filePath, () =>
+      "Add HSTS header: res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains'). Or use helmet()."
+    );
+  },
+};
+
+// ────────────────────────────────────────────
+// VC088 – Sensitive Data in URL Parameters
+// ────────────────────────────────────────────
+
+const sensitiveURLParams: CustomRule = {
+  id: "VC088",
+  title: "Sensitive Data in URL Parameters",
+  severity: "high",
+  category: "Information Leakage",
+  description: "Passing passwords, tokens, or API keys in URL query parameters exposes them in server logs, browser history, and referrer headers.",
+  check(content, filePath) {
+    if (filePath.includes("test") || filePath.includes("mock")) return [];
+    const matches: RuleMatch[] = [];
+    const patterns = [
+      /\?\s*(?:password|token|secret|api_key|apiKey|access_token|ssn|credit_card)\s*=/gi,
+      /[&?](?:password|token|secret|api_key|apiKey|access_token)\s*=\s*\$\{/gi,
+    ];
+    for (const p of patterns) {
+      matches.push(...findMatches(content, p, sensitiveURLParams, filePath, () =>
+        "Never pass sensitive data in URL parameters. Use request headers (Authorization: Bearer ...) or POST body instead."
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC089 – Missing Content-Disposition
+// ────────────────────────────────────────────
+
+const missingContentDisposition: CustomRule = {
+  id: "VC089",
+  title: "File Download Missing Content-Disposition",
+  severity: "medium",
+  category: "Configuration",
+  description: "File download endpoints without Content-Disposition headers may render files inline, leading to XSS if the file contains HTML/JS.",
+  check(content, filePath) {
+    if (!/(?:download|sendFile|send_file|pipe|createReadStream)/i.test(content)) return [];
+    if (!/(?:\/api\/|routes?\/|controllers?\/|server\.|handler)/i.test(filePath)) return [];
+    if (/Content-Disposition|attachment|download/i.test(content)) return [];
+    return findMatches(content, /(?:sendFile|send_file|createReadStream|\.pipe)\s*\(/gi, missingContentDisposition, filePath, () =>
+      "Set Content-Disposition: attachment header on file downloads: res.setHeader('Content-Disposition', 'attachment; filename=\"file.pdf\"')."
+    );
+  },
+};
+
+// ────────────────────────────────────────────
+// VC090 – Open Redirect via Host Header
+// ────────────────────────────────────────────
+
+const hostHeaderRedirect: CustomRule = {
+  id: "VC090",
+  title: "Open Redirect via Host Header",
+  severity: "high",
+  category: "Injection",
+  description: "Using req.headers.host to construct redirect URLs allows attackers to inject a malicious host header, redirecting users to phishing sites.",
+  check(content, filePath) {
+    if (filePath.includes("test") || filePath.includes("mock")) return [];
+    const matches: RuleMatch[] = [];
+    if (/req\.headers\.host|req\.get\s*\(\s*["']host["']\)/i.test(content) && /redirect|location/i.test(content)) {
+      matches.push(...findMatches(content, /req\.headers\.host|req\.get\s*\(\s*["']host["']\)/gi, hostHeaderRedirect, filePath, () =>
+        "Don't use req.headers.host for redirects — it's attacker-controlled. Use a hardcoded domain or environment variable."
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC091 – Race Condition / TOCTOU
+// ────────────────────────────────────────────
+
+const raceCondition: CustomRule = {
+  id: "VC091",
+  title: "Potential Race Condition (TOCTOU)",
+  severity: "high",
+  category: "Authorization",
+  description: "Check-then-act patterns (e.g., checking if a file exists then writing to it) are vulnerable to race conditions where state changes between the check and the action.",
+  check(content, filePath) {
+    if (filePath.includes("test") || filePath.includes("mock")) return [];
+    const matches: RuleMatch[] = [];
+    const patterns = [
+      /(?:existsSync|exists)\s*\([^)]+\)[\s\S]{0,50}(?:writeFileSync|writeFile|unlinkSync|unlink|renameSync)\s*\(/g,
+      /os\.path\.exists\s*\([^)]+\)[\s\S]{0,50}open\s*\(/g,
+      /File\.exists\?\s*\([^)]+\)[\s\S]{0,50}File\.(?:write|delete)/g,
+    ];
+    for (const p of patterns) {
+      matches.push(...findMatches(content, p, raceCondition, filePath, () =>
+        "Use atomic operations instead of check-then-act. For files: use fs.open with 'wx' flag (exclusive create), or use file locks."
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC092 – Unsafe Object.assign from User Input
+// ────────────────────────────────────────────
+
+const unsafeObjectAssign: CustomRule = {
+  id: "VC092",
+  title: "Unsafe Object Spread from User Input",
+  severity: "medium",
+  category: "Injection",
+  description: "Spreading request body into a new object can copy __proto__, constructor, or other dangerous properties, enabling prototype pollution.",
+  check(content, filePath) {
+    if (filePath.includes("test") || filePath.includes("mock")) return [];
+    const matches: RuleMatch[] = [];
+    const patterns = [
+      /Object\.assign\s*\(\s*\{\s*\}\s*,\s*(?:req\.(?:body|query|params)|body|input)\s*\)/gi,
+      /\{\s*\.\.\.(?:req\.(?:body|query|params)|body|input)\s*\}/gi,
+    ];
+    const hasSafe = /omit.*__proto__|sanitize|pick\(|lodash\.pick|stripProto/i.test(content);
+    if (hasSafe) return [];
+    for (const p of patterns) {
+      matches.push(...findMatches(content, p, unsafeObjectAssign, filePath, () =>
+        "Explicitly pick allowed properties instead of spreading: const { name, email } = req.body; const safe = { name, email };"
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC093 – Unprotected File Download Endpoint
+// ────────────────────────────────────────────
+
+const unprotectedDownload: CustomRule = {
+  id: "VC093",
+  title: "File Download Without Path Validation",
+  severity: "medium",
+  category: "Authorization",
+  description: "File download endpoints that accept user-controlled filenames without path validation allow directory traversal to read arbitrary files.",
+  check(content, filePath) {
+    if (!/(?:download|sendFile|send_file)/i.test(content)) return [];
+    if (!/(?:\/api\/|routes?\/|controllers?\/|server\.|handler)/i.test(filePath)) return [];
+    const matches: RuleMatch[] = [];
+    // sendFile/download with user input
+    if (/(?:sendFile|download|send_file)\s*\([^)]*(?:req\.|params\.|query\.|body\.)/i.test(content)) {
+      const hasValidation = /path\.resolve|path\.normalize|path\.join.*__dirname|realpath|includes\s*\(\s*["']\.\./i.test(content);
+      if (!hasValidation) {
+        matches.push(...findMatches(content, /(?:sendFile|download|send_file)\s*\(/gi, unprotectedDownload, filePath, () =>
+          "Validate file paths: const safePath = path.resolve(DOWNLOAD_DIR, filename); if (!safePath.startsWith(DOWNLOAD_DIR)) throw new Error('Invalid path');"
+        ));
+      }
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC094 – Command Injection
+// ────────────────────────────────────────────
+
+const commandInjection: CustomRule = {
+  id: "VC094",
+  title: "Potential Command Injection",
+  severity: "critical",
+  category: "Injection",
+  description: "Passing user input to shell commands (exec, system, child_process) allows attackers to execute arbitrary system commands.",
+  check(content, filePath) {
+    if (filePath.includes("test") || filePath.includes("mock")) return [];
+    const matches: RuleMatch[] = [];
+    const patterns = [
+      // Node.js
+      /(?:exec|execSync)\s*\(\s*(?:`[^`]*\$\{|["'][^"']*\+\s*(?:req\.|body\.|input|params|args|user))/gi,
+      /child_process.*exec\s*\(\s*(?!["'`])/g,
+      // Python
+      /os\.system\s*\(\s*(?!["'`].*["'`]\s*\))/g,
+      /subprocess\.(?:call|run|Popen)\s*\([^)]*shell\s*=\s*True/gi,
+      // Ruby
+      /system\s*\(\s*["'].*#\{/g,
+    ];
+    const hasSafe = /execFile|spawn|escapeshellarg|shlex\.quote|shellEscape/i.test(content);
+    if (hasSafe) return [];
+    for (const p of patterns) {
+      matches.push(...findMatches(content, p, commandInjection, filePath, () =>
+        "Use execFile/spawn instead of exec (avoids shell). Never concatenate user input into shell commands. Use parameterized arguments."
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC095 – Hardcoded CORS Origin Localhost
+// ────────────────────────────────────────────
+
+const corsLocalhost: CustomRule = {
+  id: "VC095",
+  title: "Hardcoded Localhost CORS Origin",
+  severity: "medium",
+  category: "Configuration",
+  description: "Hardcoded localhost CORS origins in production code allow any local process to make authenticated requests to your API.",
+  check(content, filePath) {
+    if (filePath.includes("test") || filePath.includes("mock") || filePath.includes(".env")) return [];
+    if (!/origin/i.test(content)) return [];
+    return findMatches(content, /origin\s*[:=]\s*["'`]http:\/\/localhost/gi, corsLocalhost, filePath, () =>
+      "Use environment variables for CORS origins: origin: process.env.ALLOWED_ORIGIN. Remove localhost from production configs."
+    );
+  },
+};
+
+// ────────────────────────────────────────────
+// VC096 – Unencrypted gRPC
+// ────────────────────────────────────────────
+
+const insecureGRPC: CustomRule = {
+  id: "VC096",
+  title: "Unencrypted gRPC Channel",
+  severity: "medium",
+  category: "Configuration",
+  description: "Using insecure gRPC channels transmits data including credentials in plaintext.",
+  check(content, filePath) {
+    if (!/grpc/i.test(content)) return [];
+    return findMatches(content, /(?:insecure_channel|createInsecure|grpc\.Insecure)/gi, insecureGRPC, filePath, () =>
+      "Use encrypted gRPC channels: grpc.ssl_channel_credentials() or grpc.credentials.createSsl()."
+    );
+  },
+};
+
+// ────────────────────────────────────────────
+// COMPLIANCE MAPPING (OWASP Top 10 + CWE)
+// ────────────────────────────────────────────
+
+export const complianceMap: Record<string, { owasp: string; cwe: string }> = {
+  VC001: { owasp: "A07:2021", cwe: "CWE-798" },
+  VC002: { owasp: "A05:2021", cwe: "CWE-200" },
+  VC003: { owasp: "A01:2021", cwe: "CWE-862" },
+  VC004: { owasp: "A01:2021", cwe: "CWE-284" },
+  VC005: { owasp: "A08:2021", cwe: "CWE-345" },
+  VC006: { owasp: "A03:2021", cwe: "CWE-89" },
+  VC007: { owasp: "A03:2021", cwe: "CWE-79" },
+  VC008: { owasp: "A04:2021", cwe: "CWE-770" },
+  VC009: { owasp: "A05:2021", cwe: "CWE-942" },
+  VC010: { owasp: "A01:2021", cwe: "CWE-602" },
+  VC011: { owasp: "A07:2021", cwe: "CWE-798" },
+  VC012: { owasp: "A05:2021", cwe: "CWE-200" },
+  VC013: { owasp: "A01:2021", cwe: "CWE-269" },
+  VC014: { owasp: "A05:2021", cwe: "CWE-538" },
+  VC015: { owasp: "A03:2021", cwe: "CWE-95" },
+  VC016: { owasp: "A01:2021", cwe: "CWE-601" },
+  VC017: { owasp: "A05:2021", cwe: "CWE-614" },
+  VC018: { owasp: "A07:2021", cwe: "CWE-798" },
+  VC019: { owasp: "A05:2021", cwe: "CWE-693" },
+  VC020: { owasp: "A05:2021", cwe: "CWE-1021" },
+  VC021: { owasp: "A01:2021", cwe: "CWE-22" },
+  VC022: { owasp: "A03:2021", cwe: "CWE-79" },
+  VC023: { owasp: "A08:2021", cwe: "CWE-1321" },
+  VC024: { owasp: "A04:2021", cwe: "CWE-770" },
+  VC025: { owasp: "A03:2021", cwe: "CWE-22" },
+  VC026: { owasp: "A05:2021", cwe: "CWE-693" },
+  VC027: { owasp: "A05:2021", cwe: "CWE-693" },
+  VC028: { owasp: "A07:2021", cwe: "CWE-20" },
+  VC029: { owasp: "A08:2021", cwe: "CWE-20" },
+  VC030: { owasp: "A08:2021", cwe: "CWE-502" },
+  VC031: { owasp: "A02:2021", cwe: "CWE-321" },
+  VC032: { owasp: "A05:2021", cwe: "CWE-319" },
+  VC033: { owasp: "A05:2021", cwe: "CWE-215" },
+  VC034: { owasp: "A02:2021", cwe: "CWE-338" },
+  VC035: { owasp: "A01:2021", cwe: "CWE-601" },
+  VC036: { owasp: "A04:2021", cwe: "CWE-755" },
+  VC037: { owasp: "A09:2021", cwe: "CWE-209" },
+  VC038: { owasp: "A04:2021", cwe: "CWE-434" },
+  VC039: { owasp: "A06:2021", cwe: "CWE-1104" },
+  VC040: { owasp: "A05:2021", cwe: "CWE-538" },
+  VC041: { owasp: "A10:2021", cwe: "CWE-918" },
+  VC042: { owasp: "A01:2021", cwe: "CWE-915" },
+  VC043: { owasp: "A02:2021", cwe: "CWE-208" },
+  VC044: { owasp: "A09:2021", cwe: "CWE-117" },
+  VC045: { owasp: "A07:2021", cwe: "CWE-521" },
+  VC046: { owasp: "A07:2021", cwe: "CWE-384" },
+  VC047: { owasp: "A07:2021", cwe: "CWE-307" },
+  VC048: { owasp: "A03:2021", cwe: "CWE-943" },
+  VC049: { owasp: "A07:2021", cwe: "CWE-798" },
+  VC050: { owasp: "A02:2021", cwe: "CWE-319" },
+  VC051: { owasp: "A05:2021", cwe: "CWE-200" },
+  VC052: { owasp: "A04:2021", cwe: "CWE-770" },
+  VC053: { owasp: "A05:2021", cwe: "CWE-798" },
+  VC054: { owasp: "A07:2021", cwe: "CWE-922" },
+  VC055: { owasp: "A05:2021", cwe: "CWE-540" },
+  VC056: { owasp: "A05:2021", cwe: "CWE-1021" },
+  VC057: { owasp: "A01:2021", cwe: "CWE-269" },
+  VC058: { owasp: "A05:2021", cwe: "CWE-250" },
+  VC059: { owasp: "A05:2021", cwe: "CWE-284" },
+  VC060: { owasp: "A02:2021", cwe: "CWE-328" },
+  VC061: { owasp: "A02:2021", cwe: "CWE-295" },
+  VC062: { owasp: "A02:2021", cwe: "CWE-321" },
+  VC063: { owasp: "A03:2021", cwe: "CWE-79" },
+  VC064: { owasp: "A01:2021", cwe: "CWE-862" },
+  VC065: { owasp: "A01:2021", cwe: "CWE-862" },
+  VC066: { owasp: "A07:2021", cwe: "CWE-798" },
+  VC067: { owasp: "A01:2021", cwe: "CWE-601" },
+  VC068: { owasp: "A07:2021", cwe: "CWE-922" },
+  VC069: { owasp: "A02:2021", cwe: "CWE-295" },
+  VC070: { owasp: "A05:2021", cwe: "CWE-489" },
+  VC071: { owasp: "A05:2021", cwe: "CWE-215" },
+  VC072: { owasp: "A07:2021", cwe: "CWE-798" },
+  VC073: { owasp: "A08:2021", cwe: "CWE-502" },
+  VC074: { owasp: "A01:2021", cwe: "CWE-352" },
+  VC075: { owasp: "A03:2021", cwe: "CWE-78" },
+  VC076: { owasp: "A07:2021", cwe: "CWE-798" },
+  VC077: { owasp: "A05:2021", cwe: "CWE-942" },
+  VC078: { owasp: "A05:2021", cwe: "CWE-250" },
+  VC079: { owasp: "A02:2021", cwe: "CWE-327" },
+  VC080: { owasp: "A04:2021", cwe: "CWE-1333" },
+  VC081: { owasp: "A03:2021", cwe: "CWE-611" },
+  VC082: { owasp: "A03:2021", cwe: "CWE-94" },
+  VC083: { owasp: "A08:2021", cwe: "CWE-502" },
+  VC084: { owasp: "A06:2021", cwe: "CWE-353" },
+  VC085: { owasp: "A01:2021", cwe: "CWE-862" },
+  VC086: { owasp: "A02:2021", cwe: "CWE-319" },
+  VC087: { owasp: "A05:2021", cwe: "CWE-311" },
+  VC088: { owasp: "A07:2021", cwe: "CWE-598" },
+  VC089: { owasp: "A05:2021", cwe: "CWE-430" },
+  VC090: { owasp: "A01:2021", cwe: "CWE-601" },
+  VC091: { owasp: "A04:2021", cwe: "CWE-367" },
+  VC092: { owasp: "A08:2021", cwe: "CWE-1321" },
+  VC093: { owasp: "A01:2021", cwe: "CWE-22" },
+  VC094: { owasp: "A03:2021", cwe: "CWE-78" },
+  VC095: { owasp: "A05:2021", cwe: "CWE-942" },
+  VC096: { owasp: "A02:2021", cwe: "CWE-319" },
+};
+
+// ────────────────────────────────────────────
 // EXPORT ALL RULES
 // ────────────────────────────────────────────
 
@@ -2449,6 +3019,24 @@ export const allRules: CustomRule[] = [
   secretsInCI,
   corsServerless,
   k8sPrivileged,
+  jwtAlgConfusion,
+  regexDos,
+  xxeVulnerability,
+  ssti,
+  javaDeserialization,
+  missingSRI,
+  exposedAdminRoutes,
+  insecureWebSocket,
+  missingHSTS,
+  sensitiveURLParams,
+  missingContentDisposition,
+  hostHeaderRedirect,
+  raceCondition,
+  unsafeObjectAssign,
+  unprotectedDownload,
+  commandInjection,
+  corsLocalhost,
+  insecureGRPC,
 ];
 
 export function runCustomRules(
@@ -2462,6 +3050,7 @@ export function runCustomRules(
     if (disabledRules.includes(rule.id)) continue;
 
     const matches = rule.check(content, filePath);
+    const compliance = complianceMap[rule.id];
     for (const match of matches) {
       findings.push({
         id: `${match.rule}-${match.file}:${match.line}`,
@@ -2476,6 +3065,8 @@ export function runCustomRules(
         fix: match.fix,
         category: match.category,
         source: "custom",
+        owasp: compliance?.owasp,
+        cwe: compliance?.cwe,
       });
     }
   }

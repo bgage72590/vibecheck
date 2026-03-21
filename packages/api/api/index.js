@@ -1289,6 +1289,218 @@ const rules = [
       return matches;
     },
   },
+  {
+    id: "VC079", title: "JWT Algorithm Confusion (alg:none)", severity: "critical", category: "Authentication",
+    description: "Accepting 'none' as JWT algorithm allows forging tokens by removing signatures.",
+    check(content, filePath) {
+      if (!/jwt|jsonwebtoken|jose/i.test(content)) return [];
+      const matches = [];
+      if (/algorithms\s*:\s*\[.*["']none["']/gi.test(content)) {
+        matches.push(...findMatches(content, /algorithms\s*:\s*\[.*["']none["']/gi, this, filePath, () => "Never allow algorithm 'none'. Specify: algorithms: ['RS256']."));
+      }
+      if (/jwt\.verify\s*\(/g.test(content) && !/algorithms/i.test(content)) {
+        matches.push(...findMatches(content, /jwt\.verify\s*\(/g, this, filePath, () => "Specify algorithms in jwt.verify: { algorithms: ['HS256'] }."));
+      }
+      return matches;
+    },
+  },
+  {
+    id: "VC080", title: "Potential ReDoS", severity: "high", category: "Availability",
+    description: "Nested quantifiers like (a+)+ cause catastrophic backtracking.",
+    check(content, filePath) {
+      if (filePath.includes("test")) return [];
+      const patterns = [/new\s+RegExp\s*\(\s*["'`].*\([^)]*[+*]\)[+*{]/g, /\/.*\([^)]*[+*]\)[+*{].*\//g];
+      const matches = [];
+      for (const p of patterns) { matches.push(...findMatches(content, p, this, filePath, () => "Avoid nested quantifiers. Use the 're2' library.")); }
+      return matches;
+    },
+  },
+  {
+    id: "VC081", title: "XML External Entity (XXE)", severity: "critical", category: "Injection",
+    description: "XML parsers processing external entities allow file reads and SSRF.",
+    check(content, filePath) {
+      if (!/xml|parseXML|DOMParser|etree|lxml/i.test(content)) return [];
+      if (/noent.*false|resolveExternals.*false|defusedxml|disallow-doctype-decl/i.test(content)) return [];
+      const patterns = [/\.parseXML\s*\(/g, /new\s+DOMParser\s*\(\)/g, /etree\.parse\s*\(/g, /SAXParserFactory/g];
+      const matches = [];
+      for (const p of patterns) { matches.push(...findMatches(content, p, this, filePath, () => "Disable external entities. Use defusedxml (Python).")); }
+      return matches;
+    },
+  },
+  {
+    id: "VC082", title: "Server-Side Template Injection", severity: "critical", category: "Injection",
+    description: "Rendering templates from user input allows arbitrary code execution.",
+    check(content, filePath) {
+      if (filePath.includes("test")) return [];
+      const patterns = [/render_template_string\s*\(\s*(?!["'`])/g, /Template\s*\(\s*(?:req\.|body\.|input)/gi, /nunjucks\.renderString\s*\(\s*(?:req\.|body\.|input)/gi, /ejs\.render\s*\(\s*(?:req\.|body\.|input)/gi];
+      const matches = [];
+      for (const p of patterns) { matches.push(...findMatches(content, p, this, filePath, () => "Use pre-defined templates with data as context variables.")); }
+      return matches;
+    },
+  },
+  {
+    id: "VC083", title: "Insecure Java Deserialization", severity: "critical", category: "Injection",
+    description: "ObjectInputStream.readObject() allows arbitrary code execution via gadget chains.",
+    check(content, filePath) {
+      if (!filePath.match(/\.java$|\.kt$/)) return [];
+      if (/ValidatingObjectInputStream|ObjectInputFilter|SerialKiller/i.test(content)) return [];
+      const patterns = [/ObjectInputStream\s*\(/g, /\.readObject\s*\(\)/g, /XMLDecoder\s*\(/g];
+      const matches = [];
+      for (const p of patterns) { matches.push(...findMatches(content, p, this, filePath, () => "Use ValidatingObjectInputStream or JSON instead.")); }
+      return matches;
+    },
+  },
+  {
+    id: "VC084", title: "Missing Subresource Integrity (SRI)", severity: "medium", category: "Configuration",
+    description: "External scripts without integrity= can be tampered with if CDN is compromised.",
+    check(content, filePath) {
+      if (!filePath.match(/\.(html|htm|jsx|tsx)$/)) return [];
+      const matches = [];
+      const re = /<script\s+[^>]*src\s*=\s*["']https?:\/\/[^"']+["'][^>]*>/gi;
+      let m;
+      while ((m = re.exec(content)) !== null) {
+        if (!m[0].includes("integrity")) {
+          const lineNum = content.substring(0, m.index).split("\n").length;
+          matches.push({ rule: "VC084", title: this.title, severity: "medium", category: "Configuration", file: filePath, line: lineNum, snippet: getSnippet(content, lineNum), fix: 'Add integrity and crossorigin attributes.' });
+        }
+      }
+      return matches;
+    },
+  },
+  {
+    id: "VC085", title: "Exposed Admin or Debug Route", severity: "high", category: "Information Leakage",
+    description: "Routes like /admin, /debug without auth expose sensitive controls.",
+    check(content, filePath) {
+      if (!/(?:\/api\/|routes?\/|server\.|app\.|index\.[jt]s)/i.test(filePath)) return [];
+      if (/auth|requireAuth|isAdmin|middleware.*admin/i.test(content)) return [];
+      return findMatches(content, /[.'"]\s*(?:get|use|all)\s*\(\s*["'`]\/(?:admin|debug|_debug|phpinfo|actuator|graphiql|playground)["'`]/gi, this, filePath, () =>
+        "Protect admin/debug routes with auth middleware. Disable in production."
+      );
+    },
+  },
+  {
+    id: "VC086", title: "Insecure WebSocket (ws://)", severity: "medium", category: "Configuration",
+    description: "ws:// transmits data in plaintext. Use wss:// for encrypted connections.",
+    check(content, filePath) {
+      if (filePath.includes("test")) return [];
+      return findMatches(content, /new\s+WebSocket\s*\(\s*["'`]ws:\/\//g, this, filePath, () => "Use wss:// instead of ws://.");
+    },
+  },
+  {
+    id: "VC087", title: "Missing HSTS Header", severity: "medium", category: "Configuration",
+    description: "Without HSTS, browsers allow HTTPS-to-HTTP downgrade attacks.",
+    check(content, filePath) {
+      if (!/(?:server|app|index|main)\.[jt]sx?$/.test(filePath)) return [];
+      if (!/(?:express|hono|fastify|koa)/i.test(content)) return [];
+      if (/Strict-Transport-Security|hsts|helmet/i.test(content)) return [];
+      return findMatches(content, /(?:express|hono|fastify|koa)\s*\(/gi, this, filePath, () =>
+        "Add HSTS: res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')."
+      );
+    },
+  },
+  {
+    id: "VC088", title: "Sensitive Data in URL Parameters", severity: "high", category: "Information Leakage",
+    description: "Passwords/tokens in URLs are exposed in logs, history, and referrer headers.",
+    check(content, filePath) {
+      if (filePath.includes("test")) return [];
+      const patterns = [/\?\s*(?:password|token|secret|api_key|apiKey|access_token)\s*=/gi, /[&?](?:password|token|secret|api_key)\s*=\s*\$\{/gi];
+      const matches = [];
+      for (const p of patterns) { matches.push(...findMatches(content, p, this, filePath, () => "Use Authorization header or POST body instead.")); }
+      return matches;
+    },
+  },
+  {
+    id: "VC089", title: "File Download Missing Content-Disposition", severity: "medium", category: "Configuration",
+    description: "Downloads without Content-Disposition may render inline, enabling XSS.",
+    check(content, filePath) {
+      if (!/(?:download|sendFile|send_file|createReadStream)/i.test(content)) return [];
+      if (!/(?:\/api\/|routes?\/|server\.|handler)/i.test(filePath)) return [];
+      if (/Content-Disposition|attachment/i.test(content)) return [];
+      return findMatches(content, /(?:sendFile|send_file|createReadStream|\.pipe)\s*\(/gi, this, filePath, () =>
+        "Set Content-Disposition: attachment header on downloads."
+      );
+    },
+  },
+  {
+    id: "VC090", title: "Open Redirect via Host Header", severity: "high", category: "Injection",
+    description: "Using req.headers.host for redirects allows attackers to inject malicious hosts.",
+    check(content, filePath) {
+      if (filePath.includes("test")) return [];
+      if (/req\.headers\.host|req\.get\s*\(\s*["']host["']\)/i.test(content) && /redirect|location/i.test(content)) {
+        return findMatches(content, /req\.headers\.host|req\.get\s*\(\s*["']host["']\)/gi, this, filePath, () =>
+          "Don't use req.headers.host for redirects. Use a hardcoded domain or env var."
+        );
+      }
+      return [];
+    },
+  },
+  {
+    id: "VC091", title: "Race Condition (TOCTOU)", severity: "high", category: "Authorization",
+    description: "Check-then-act patterns are vulnerable to state changes between check and action.",
+    check(content, filePath) {
+      if (filePath.includes("test")) return [];
+      const patterns = [/(?:existsSync|exists)\s*\([^)]+\)[\s\S]{0,50}(?:writeFileSync|writeFile|unlinkSync)\s*\(/g, /os\.path\.exists\s*\([^)]+\)[\s\S]{0,50}open\s*\(/g];
+      const matches = [];
+      for (const p of patterns) { matches.push(...findMatches(content, p, this, filePath, () => "Use atomic operations: fs.open with 'wx' flag.")); }
+      return matches;
+    },
+  },
+  {
+    id: "VC092", title: "Unsafe Object Spread from User Input", severity: "medium", category: "Injection",
+    description: "Spreading req.body can copy __proto__ or constructor properties (prototype pollution).",
+    check(content, filePath) {
+      if (filePath.includes("test")) return [];
+      if (/omit.*__proto__|sanitize|pick\(/i.test(content)) return [];
+      const patterns = [/Object\.assign\s*\(\s*\{\s*\}\s*,\s*(?:req\.(?:body|query|params)|body|input)\s*\)/gi, /\{\s*\.\.\.(?:req\.(?:body|query|params)|body|input)\s*\}/gi];
+      const matches = [];
+      for (const p of patterns) { matches.push(...findMatches(content, p, this, filePath, () => "Pick allowed properties explicitly.")); }
+      return matches;
+    },
+  },
+  {
+    id: "VC093", title: "File Download Without Path Validation", severity: "medium", category: "Authorization",
+    description: "User-controlled filenames in downloads allow directory traversal.",
+    check(content, filePath) {
+      if (!/(?:sendFile|download|send_file)\s*\([^)]*(?:req\.|params\.|query\.)/i.test(content)) return [];
+      if (/path\.resolve|path\.normalize|realpath/i.test(content)) return [];
+      return findMatches(content, /(?:sendFile|download|send_file)\s*\(/gi, this, filePath, () =>
+        "Validate: const safe = path.resolve(DIR, name); if (!safe.startsWith(DIR)) throw Error();"
+      );
+    },
+  },
+  {
+    id: "VC094", title: "Potential Command Injection", severity: "critical", category: "Injection",
+    description: "User input in shell commands allows arbitrary command execution.",
+    check(content, filePath) {
+      if (filePath.includes("test")) return [];
+      if (/execFile|spawn|escapeshellarg|shlex\.quote/i.test(content)) return [];
+      const patterns = [/(?:exec|execSync)\s*\(\s*(?:`[^`]*\$\{|["'][^"']*\+\s*(?:req\.|body\.|input|params))/gi, /os\.system\s*\(\s*(?!["'`].*["'`]\s*\))/g, /subprocess\.(?:call|run|Popen)\s*\([^)]*shell\s*=\s*True/gi];
+      const matches = [];
+      for (const p of patterns) { matches.push(...findMatches(content, p, this, filePath, () => "Use execFile/spawn. Never concatenate user input into commands.")); }
+      return matches;
+    },
+  },
+  {
+    id: "VC095", title: "Hardcoded Localhost CORS Origin", severity: "medium", category: "Configuration",
+    description: "Hardcoded localhost CORS allows any local process to call your API.",
+    check(content, filePath) {
+      if (filePath.includes("test") || filePath.includes(".env")) return [];
+      if (!/origin/i.test(content)) return [];
+      return findMatches(content, /origin\s*[:=]\s*["'`]http:\/\/localhost/gi, this, filePath, () =>
+        "Use env vars for CORS origins: origin: process.env.ALLOWED_ORIGIN."
+      );
+    },
+  },
+  {
+    id: "VC096", title: "Unencrypted gRPC Channel", severity: "medium", category: "Configuration",
+    description: "Insecure gRPC channels transmit data including credentials in plaintext.",
+    check(content, filePath) {
+      if (!/grpc/i.test(content)) return [];
+      return findMatches(content, /(?:insecure_channel|createInsecure|grpc\.Insecure)/gi, this, filePath, () =>
+        "Use encrypted channels: grpc.ssl_channel_credentials()."
+      );
+    },
+  },
 ];
 
 // ────────────────────────────────────────────
@@ -1342,6 +1554,60 @@ function calculateGrade(findings, totalFiles) {
   return { grade, score: Math.round(score), summary };
 }
 
+// COMPLIANCE MAPPING
+const complianceMap = {
+  VC001: { owasp: "A07:2021", cwe: "CWE-798" }, VC002: { owasp: "A05:2021", cwe: "CWE-200" },
+  VC003: { owasp: "A01:2021", cwe: "CWE-862" }, VC004: { owasp: "A01:2021", cwe: "CWE-284" },
+  VC005: { owasp: "A08:2021", cwe: "CWE-345" }, VC006: { owasp: "A03:2021", cwe: "CWE-89" },
+  VC007: { owasp: "A03:2021", cwe: "CWE-79" }, VC008: { owasp: "A04:2021", cwe: "CWE-770" },
+  VC009: { owasp: "A05:2021", cwe: "CWE-942" }, VC010: { owasp: "A01:2021", cwe: "CWE-602" },
+  VC011: { owasp: "A07:2021", cwe: "CWE-798" }, VC012: { owasp: "A05:2021", cwe: "CWE-200" },
+  VC013: { owasp: "A01:2021", cwe: "CWE-269" }, VC014: { owasp: "A05:2021", cwe: "CWE-538" },
+  VC015: { owasp: "A03:2021", cwe: "CWE-95" }, VC016: { owasp: "A01:2021", cwe: "CWE-601" },
+  VC017: { owasp: "A05:2021", cwe: "CWE-614" }, VC018: { owasp: "A07:2021", cwe: "CWE-798" },
+  VC019: { owasp: "A05:2021", cwe: "CWE-693" }, VC020: { owasp: "A05:2021", cwe: "CWE-1021" },
+  VC021: { owasp: "A01:2021", cwe: "CWE-22" }, VC022: { owasp: "A03:2021", cwe: "CWE-79" },
+  VC023: { owasp: "A08:2021", cwe: "CWE-1321" }, VC024: { owasp: "A04:2021", cwe: "CWE-770" },
+  VC025: { owasp: "A03:2021", cwe: "CWE-22" }, VC026: { owasp: "A05:2021", cwe: "CWE-693" },
+  VC027: { owasp: "A05:2021", cwe: "CWE-693" }, VC028: { owasp: "A07:2021", cwe: "CWE-20" },
+  VC029: { owasp: "A08:2021", cwe: "CWE-20" }, VC030: { owasp: "A08:2021", cwe: "CWE-502" },
+  VC031: { owasp: "A02:2021", cwe: "CWE-321" }, VC032: { owasp: "A05:2021", cwe: "CWE-319" },
+  VC033: { owasp: "A05:2021", cwe: "CWE-215" }, VC034: { owasp: "A02:2021", cwe: "CWE-338" },
+  VC035: { owasp: "A01:2021", cwe: "CWE-601" }, VC036: { owasp: "A04:2021", cwe: "CWE-755" },
+  VC037: { owasp: "A09:2021", cwe: "CWE-209" }, VC038: { owasp: "A04:2021", cwe: "CWE-434" },
+  VC039: { owasp: "A06:2021", cwe: "CWE-1104" }, VC040: { owasp: "A05:2021", cwe: "CWE-538" },
+  VC041: { owasp: "A10:2021", cwe: "CWE-918" }, VC042: { owasp: "A01:2021", cwe: "CWE-915" },
+  VC043: { owasp: "A02:2021", cwe: "CWE-208" }, VC044: { owasp: "A09:2021", cwe: "CWE-117" },
+  VC045: { owasp: "A07:2021", cwe: "CWE-521" }, VC046: { owasp: "A07:2021", cwe: "CWE-384" },
+  VC047: { owasp: "A07:2021", cwe: "CWE-307" }, VC048: { owasp: "A03:2021", cwe: "CWE-943" },
+  VC049: { owasp: "A07:2021", cwe: "CWE-798" }, VC050: { owasp: "A02:2021", cwe: "CWE-319" },
+  VC051: { owasp: "A05:2021", cwe: "CWE-200" }, VC052: { owasp: "A04:2021", cwe: "CWE-770" },
+  VC053: { owasp: "A05:2021", cwe: "CWE-798" }, VC054: { owasp: "A07:2021", cwe: "CWE-922" },
+  VC055: { owasp: "A05:2021", cwe: "CWE-540" }, VC056: { owasp: "A05:2021", cwe: "CWE-1021" },
+  VC057: { owasp: "A01:2021", cwe: "CWE-269" }, VC058: { owasp: "A05:2021", cwe: "CWE-250" },
+  VC059: { owasp: "A05:2021", cwe: "CWE-284" }, VC060: { owasp: "A02:2021", cwe: "CWE-328" },
+  VC061: { owasp: "A02:2021", cwe: "CWE-295" }, VC062: { owasp: "A02:2021", cwe: "CWE-321" },
+  VC063: { owasp: "A03:2021", cwe: "CWE-79" }, VC064: { owasp: "A01:2021", cwe: "CWE-862" },
+  VC065: { owasp: "A01:2021", cwe: "CWE-862" }, VC066: { owasp: "A07:2021", cwe: "CWE-798" },
+  VC067: { owasp: "A01:2021", cwe: "CWE-601" }, VC068: { owasp: "A07:2021", cwe: "CWE-922" },
+  VC069: { owasp: "A02:2021", cwe: "CWE-295" }, VC070: { owasp: "A05:2021", cwe: "CWE-489" },
+  VC071: { owasp: "A05:2021", cwe: "CWE-215" }, VC072: { owasp: "A07:2021", cwe: "CWE-798" },
+  VC073: { owasp: "A08:2021", cwe: "CWE-502" }, VC074: { owasp: "A01:2021", cwe: "CWE-352" },
+  VC075: { owasp: "A03:2021", cwe: "CWE-78" }, VC076: { owasp: "A07:2021", cwe: "CWE-798" },
+  VC077: { owasp: "A05:2021", cwe: "CWE-942" }, VC078: { owasp: "A05:2021", cwe: "CWE-250" },
+  VC079: { owasp: "A02:2021", cwe: "CWE-327" }, VC080: { owasp: "A04:2021", cwe: "CWE-1333" },
+  VC081: { owasp: "A03:2021", cwe: "CWE-611" }, VC082: { owasp: "A03:2021", cwe: "CWE-94" },
+  VC083: { owasp: "A08:2021", cwe: "CWE-502" }, VC084: { owasp: "A06:2021", cwe: "CWE-353" },
+  VC085: { owasp: "A01:2021", cwe: "CWE-862" }, VC086: { owasp: "A02:2021", cwe: "CWE-319" },
+  VC087: { owasp: "A05:2021", cwe: "CWE-311" }, VC088: { owasp: "A07:2021", cwe: "CWE-598" },
+  VC089: { owasp: "A05:2021", cwe: "CWE-430" }, VC090: { owasp: "A01:2021", cwe: "CWE-601" },
+  VC091: { owasp: "A04:2021", cwe: "CWE-367" }, VC092: { owasp: "A08:2021", cwe: "CWE-1321" },
+  VC093: { owasp: "A01:2021", cwe: "CWE-22" }, VC094: { owasp: "A03:2021", cwe: "CWE-78" },
+  VC095: { owasp: "A05:2021", cwe: "CWE-942" }, VC096: { owasp: "A02:2021", cwe: "CWE-319" },
+};
+
+const GRADE_PERCENTILES = { "A+": 98, "A": 90, "B": 70, "C": 45, "D": 20, "F": 5 };
+
 function runScan(files) {
   const findings = [];
   for (const { path, content } of files) {
@@ -1359,6 +1625,8 @@ function runScan(files) {
           snippet: match.snippet,
           fix: match.fix,
           category: match.category,
+          owasp: (complianceMap[rule.id] || {}).owasp,
+          cwe: (complianceMap[rule.id] || {}).cwe,
           source: "custom",
         });
       }
@@ -1529,6 +1797,7 @@ app.post("/scans/upload", async (c) => {
       gradeSummary: gradeResult.summary,
       frameworks,
       totalRules: rules.length,
+      percentile: GRADE_PERCENTILES[gradeResult.grade] || 50,
       criticalCount: findings.filter(f => f.severity === "critical").length,
       highCount: findings.filter(f => f.severity === "high").length,
       mediumCount: findings.filter(f => f.severity === "medium").length,
@@ -1603,6 +1872,7 @@ app.post("/scans/upload-json", async (c) => {
       gradeSummary: gradeResult.summary,
       frameworks,
       totalRules: rules.length,
+      percentile: GRADE_PERCENTILES[gradeResult.grade] || 50,
       criticalCount: findings.filter(f => f.severity === "critical").length,
       highCount: findings.filter(f => f.severity === "high").length,
       mediumCount: findings.filter(f => f.severity === "medium").length,

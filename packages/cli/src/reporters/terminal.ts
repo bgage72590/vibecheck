@@ -53,10 +53,13 @@ export function renderTerminalReport(result: ScanResult, files?: { path: string;
     }
   }
 
-  // Grade
+  // Grade + Benchmark
+  const GRADE_PERCENTILES: Record<string, number> = { "A+": 98, "A": 90, "B": 70, "C": 45, "D": 20, "F": 5 };
   const { grade, score, summary } = calculateGrade(findings, filesScanned);
   const gradeColor = GRADE_COLORS[grade];
+  const percentile = GRADE_PERCENTILES[grade] ?? 50;
   console.log(chalk.gray("  Security Grade: ") + gradeColor(` ${grade} `) + chalk.gray(` (${score}/100) — ${summary}`));
+  console.log(chalk.gray(`  Benchmark: More secure than ${percentile}% of projects scanned`));
   console.log("");
 
   if (findings.length === 0) {
@@ -95,7 +98,11 @@ export function renderTerminalReport(result: ScanResult, files?: { path: string;
       ? chalk.magenta(" [AI] ")
       : chalk.gray(` [${finding.rule}] `);
 
-    console.log(`  ${severityLabel}${sourceLabel}${chalk.bold(finding.title)}`);
+    const complianceTags = [
+      finding.owasp ? chalk.yellow(`[${finding.owasp}]`) : "",
+      finding.cwe ? chalk.blue(`[${finding.cwe}]`) : "",
+    ].filter(Boolean).join(" ");
+    console.log(`  ${severityLabel}${sourceLabel}${chalk.bold(finding.title)} ${complianceTags}`);
     console.log(chalk.gray(`  ${finding.file}:${finding.line}`));
     console.log("");
 
@@ -123,6 +130,32 @@ export function renderTerminalReport(result: ScanResult, files?: { path: string;
     }
 
     console.log(chalk.gray("  " + "─".repeat(50)));
+    console.log("");
+  }
+
+  // OWASP Top 10 Summary
+  const owaspFindings = findings.filter(f => f.owasp);
+  if (owaspFindings.length > 0) {
+    const owaspCats: Record<string, { name: string; count: number }> = {
+      "A01:2021": { name: "Broken Access Control", count: 0 },
+      "A02:2021": { name: "Cryptographic Failures", count: 0 },
+      "A03:2021": { name: "Injection", count: 0 },
+      "A04:2021": { name: "Insecure Design", count: 0 },
+      "A05:2021": { name: "Security Misconfiguration", count: 0 },
+      "A06:2021": { name: "Vulnerable Components", count: 0 },
+      "A07:2021": { name: "Auth Failures", count: 0 },
+      "A08:2021": { name: "Data Integrity", count: 0 },
+      "A09:2021": { name: "Logging Failures", count: 0 },
+      "A10:2021": { name: "SSRF", count: 0 },
+    };
+    for (const f of owaspFindings) {
+      if (f.owasp && owaspCats[f.owasp]) owaspCats[f.owasp].count++;
+    }
+    console.log(chalk.bold("  OWASP Top 10 Compliance"));
+    for (const [id, { name, count }] of Object.entries(owaspCats)) {
+      const status = count > 0 ? chalk.red(`${count} issue${count > 1 ? "s" : ""}`) : chalk.green("PASS");
+      console.log(chalk.gray(`    ${id} ${name}: `) + status);
+    }
     console.log("");
   }
 

@@ -18,12 +18,14 @@ program
   .option("--no-ai", "Skip AI-powered analysis")
   .option("-f, --format <format>", "Output format: terminal, json, sarif", "terminal")
   .option("-v, --verbose", "Show detailed output", false)
-  .action(async (directory: string, opts: { ai: boolean; format: string; verbose: boolean }) => {
+  .option("--diff [base]", "Scan only files changed vs base branch (default: main)")
+  .action(async (directory: string, opts: { ai: boolean; format: string; verbose: boolean; diff?: string | boolean }) => {
     await scanCommand(directory, {
       directory,
       aiAnalysis: opts.ai,
       format: opts.format as "terminal" | "json" | "sarif",
       verbose: opts.verbose,
+      diff: opts.diff,
     });
   });
 
