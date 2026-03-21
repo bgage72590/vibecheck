@@ -800,6 +800,301 @@ const rules = [
       return matches;
     },
   },
+  {
+    id: "VC045", title: "Weak Password Requirements", severity: "high", category: "Authentication",
+    description: "Registration or password endpoints without minimum length/complexity validation allow weak passwords.",
+    check(content, filePath) {
+      if (!/(?:password|passwd|pwd)/i.test(content)) return [];
+      if (!/(?:register|signup|sign.up|createUser|changePassword|resetPassword)/i.test(content) && !/(?:\/api\/|routes?\/|controllers?\/)/i.test(filePath)) return [];
+      if (/(?:password|pwd).*(?:\.length|minLength|minlength)\s*(?:>=?|<|>)\s*\d|zxcvbn|password-validator|isStrongPassword/i.test(content)) return [];
+      const has = /(?:password|pwd)\s*[:=]\s*(?:req\.body|body|input|params|args)\./i.test(content);
+      if (!has) return [];
+      return findMatches(content, /(?:password|pwd)\s*[:=]\s*(?:req\.body|body|input|params|args)\./gi, this, filePath, () =>
+        "Enforce minimum password requirements: at least 8 characters. Use zxcvbn for strength estimation."
+      );
+    },
+  },
+  {
+    id: "VC046", title: "Session Fixation Risk", severity: "high", category: "Authentication",
+    description: "Not regenerating session IDs after login allows session fixation attacks.",
+    check(content, filePath) {
+      if (!/(?:login|signin|authenticate)/i.test(content) || !/session/i.test(content)) return [];
+      if (/regenerate|destroy.*create|rotateSession/i.test(content)) return [];
+      if (!/(?:login|signin|authenticate)\s*(?:=|:|\()/i.test(content)) return [];
+      return findMatches(content, /(?:login|signin|authenticate)\s*(?:=|:|\()/gi, this, filePath, () =>
+        "Regenerate session ID after login: req.session.regenerate()."
+      );
+    },
+  },
+  {
+    id: "VC047", title: "Login Without Brute Force Protection", severity: "high", category: "Authentication",
+    description: "Login endpoints without rate limiting or lockout are vulnerable to brute force attacks.",
+    check(content, filePath) {
+      if (!/(?:login|signin|auth)/i.test(filePath) && !/(?:login|signin|authenticate).*(?:post|handler)/i.test(content)) return [];
+      if (!/(?:password|credential)/i.test(content)) return [];
+      if (/rate.?limit|throttle|lockout|maxAttempts|failedAttempts|brute|express-brute|slowDown/i.test(content)) return [];
+      return findMatches(content, /\.(post|handler)\s*\([^)]*(?:login|signin|auth)/gi, this, filePath, () =>
+        "Add brute force protection: rate limiting, progressive delays, or account lockout."
+      );
+    },
+  },
+  {
+    id: "VC048", title: "Potential NoSQL Injection", severity: "critical", category: "Injection",
+    description: "Unsanitized user input in MongoDB queries allows bypassing auth and extracting data.",
+    check(content, filePath) {
+      if (!/(?:mongo|mongoose|findOne|findById|collection|aggregate)/i.test(content)) return [];
+      if (/sanitize|escape|mongo-sanitize|express-mongo-sanitize|typeof.*===.*string/i.test(content)) return [];
+      const patterns = [
+        /\.find(?:One)?\s*\(\s*(?:req\.body|body|input|params)\s*\)/gi,
+        /\.find(?:One)?\s*\(\s*\{[^}]*:\s*(?:req\.body|body|input|params)\./gi,
+        /\$where\s*:\s*(?!["'`])/g,
+        /\.(?:findOne|findById|deleteOne|updateOne|findOneAndUpdate)\s*\(\s*\{[^}]*:\s*(?:req\.(?:body|query|params))\./gi,
+      ];
+      const matches = [];
+      for (const p of patterns) {
+        matches.push(...findMatches(content, p, this, filePath, () =>
+          "Sanitize MongoDB inputs: use express-mongo-sanitize and validate types."
+        ));
+      }
+      return matches;
+    },
+  },
+  {
+    id: "VC049", title: "Database Credentials in Config File", severity: "critical", category: "Secrets",
+    description: "DB connection strings with credentials in committed config files expose them to anyone with repo access.",
+    check(content, filePath) {
+      if (filePath.endsWith(".example") || filePath.endsWith(".template") || filePath.match(/\.env/)) return [];
+      if (!filePath.match(/(?:config|setting|database|db|knexfile|sequelize|drizzle|prisma)/i) && !filePath.match(/\.(json|yaml|yml|toml|js|ts)$/)) return [];
+      const patterns = [
+        /(?:host|server|database|db).*(?:password|passwd|pwd)\s*[:=]\s*["'`][^"'`]{3,}["'`]/gi,
+        /(?:connection|database|db).*(?:postgres|mysql|mongodb|redis):\/\/[^:]+:[^@]+@/gi,
+      ];
+      const matches = [];
+      for (const p of patterns) {
+        matches.push(...findMatches(content, p, this, filePath, () =>
+          "Move database credentials to environment variables."
+        ));
+      }
+      return matches;
+    },
+  },
+  {
+    id: "VC050", title: "Database Connection Without SSL/TLS", severity: "high", category: "Configuration",
+    description: "DB connections without SSL transmit credentials and data in plaintext.",
+    check(content, filePath) {
+      if (!/(?:createConnection|createPool|createClient|connect|new.*Client|knex|sequelize|drizzle)/i.test(content)) return [];
+      if (!/(?:postgres|mysql|mariadb|pg|mongo)/i.test(content)) return [];
+      const patterns = [/ssl\s*:\s*false/gi, /sslmode\s*[:=]\s*["'`]?disable["'`]?/gi, /rejectUnauthorized\s*:\s*false/gi];
+      const matches = [];
+      for (const p of patterns) {
+        matches.push(...findMatches(content, p, this, filePath, () =>
+          "Enable SSL/TLS for database connections: { ssl: { rejectUnauthorized: true } }."
+        ));
+      }
+      return matches;
+    },
+  },
+  {
+    id: "VC051", title: "GraphQL Introspection Enabled in Production", severity: "medium", category: "Information Leakage",
+    description: "GraphQL introspection exposes your entire API schema to attackers.",
+    check(content, filePath) {
+      if (!/graphql/i.test(content) && !/graphql/i.test(filePath)) return [];
+      const matches = [];
+      if (/introspection\s*:\s*true/i.test(content)) {
+        matches.push(...findMatches(content, /introspection\s*:\s*true/gi, this, filePath, () =>
+          "Disable introspection in production: introspection: process.env.NODE_ENV !== 'production'."
+        ));
+      }
+      if (/(?:ApolloServer|GraphQLServer|createYoga)\s*\(/i.test(content) && !/introspection/i.test(content)) {
+        matches.push(...findMatches(content, /(?:ApolloServer|GraphQLServer|createYoga)\s*\(/gi, this, filePath, () =>
+          "Explicitly disable introspection in production."
+        ));
+      }
+      return matches;
+    },
+  },
+  {
+    id: "VC052", title: "Missing Request Body Size Limit", severity: "medium", category: "Availability",
+    description: "Servers without body size limits are vulnerable to DoS via oversized payloads.",
+    check(content, filePath) {
+      if (!/(?:server|app|index|main)\.[jt]sx?$/.test(filePath)) return [];
+      if (!/(?:express|hono|fastify|koa)/i.test(content)) return [];
+      const matches = [];
+      if (/express\.json\s*\(\s*\)/g.test(content)) {
+        matches.push(...findMatches(content, /express\.json\s*\(\s*\)/g, this, filePath, () =>
+          "Set body size limit: express.json({ limit: '1mb' })."
+        ));
+      }
+      if (/bodyParser\.json\s*\(\s*\)/g.test(content)) {
+        matches.push(...findMatches(content, /bodyParser\.json\s*\(\s*\)/g, this, filePath, () =>
+          "Set body size limit: bodyParser.json({ limit: '1mb' })."
+        ));
+      }
+      return matches;
+    },
+  },
+  {
+    id: "VC053", title: "Hardcoded IP or Host Allowlist", severity: "medium", category: "Configuration",
+    description: "Hardcoded IPs in allowlists are brittle; use environment variables.",
+    check(content, filePath) {
+      if (filePath.includes("test") || filePath.includes("mock") || filePath.match(/\.(md|txt)$/)) return [];
+      const patterns = [
+        /(?:allowedIPs|allowed_ips|whitelist|allowlist|trustedHosts)\s*[:=]\s*\[\s*["'`]\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/gi,
+      ];
+      const matches = [];
+      for (const p of patterns) {
+        matches.push(...findMatches(content, p, this, filePath, () =>
+          "Move IP allowlists to environment variables: process.env.ALLOWED_IPS?.split(',')."
+        ));
+      }
+      return matches;
+    },
+  },
+  {
+    id: "VC054", title: "Sensitive Data in localStorage", severity: "high", category: "Secrets",
+    description: "Tokens/passwords in localStorage are accessible to any XSS attack. Use httpOnly cookies.",
+    check(content, filePath) {
+      if (!filePath.match(/\.(jsx?|tsx?|vue|svelte)$/)) return [];
+      const patterns = [
+        /localStorage\.setItem\s*\(\s*["'`](?:token|access_token|auth_token|jwt|session|refresh_token|api_key|password|secret)/gi,
+        /localStorage\s*\[\s*["'`](?:token|access_token|auth_token|jwt|session|refresh_token|api_key|password|secret)/gi,
+      ];
+      const matches = [];
+      for (const p of patterns) {
+        matches.push(...findMatches(content, p, this, filePath, () =>
+          "Use httpOnly cookies instead of localStorage for tokens/secrets."
+        ));
+      }
+      return matches;
+    },
+  },
+  {
+    id: "VC055", title: "Source Maps Exposed in Production", severity: "medium", category: "Information Leakage",
+    description: "Source map files in production expose original source code.",
+    check(content, filePath) {
+      if (!filePath.match(/(?:webpack|vite|rollup|next)\.config|tsconfig/i)) return [];
+      const matches = [];
+      if (/(?:sourceMap|source-map|sourcemap)\s*[:=]\s*true/i.test(content) && !/process\.env\.NODE_ENV|NODE_ENV|production/i.test(content)) {
+        matches.push(...findMatches(content, /(?:sourceMap|source-map|sourcemap)\s*[:=]\s*true/gi, this, filePath, () =>
+          "Disable source maps in production: sourceMap: process.env.NODE_ENV !== 'production'."
+        ));
+      }
+      if (/productionSourceMap\s*:\s*true/i.test(content)) {
+        matches.push(...findMatches(content, /productionSourceMap\s*:\s*true/gi, this, filePath, () =>
+          "Set productionSourceMap: false."
+        ));
+      }
+      return matches;
+    },
+  },
+  {
+    id: "VC056", title: "Clickjacking — Missing X-Frame-Options", severity: "medium", category: "Configuration",
+    description: "Without X-Frame-Options, your page can be embedded in attacker iframes for clickjacking.",
+    check(content, filePath) {
+      if (filePath.match(/\.(html|htm)$/) && !/X-Frame-Options|frame-ancestors/i.test(content)) {
+        return [{ rule: "VC056", title: this.title, severity: "medium", category: "Configuration", file: filePath, line: 1, snippet: getSnippet(content, 1),
+          fix: 'Add <meta http-equiv="X-Frame-Options" content="DENY">.' }];
+      }
+      if (/(?:server|app|index|main)\.[jt]sx?$/.test(filePath) && /(?:express|hono|fastify|koa)/i.test(content) && !/X-Frame-Options|frame-ancestors|helmet/i.test(content)) {
+        return findMatches(content, /(?:express|hono|fastify|koa)\s*\(/gi, this, filePath, () =>
+          "Add X-Frame-Options: DENY header. Or use helmet: app.use(helmet())."
+        );
+      }
+      return [];
+    },
+  },
+  {
+    id: "VC057", title: "Overly Permissive IAM/Cloud Permissions", severity: "critical", category: "Authorization",
+    description: "Wildcard (*) permissions in IAM/Terraform violate least privilege.",
+    check(content, filePath) {
+      if (!filePath.match(/\.(tf|hcl|json|yaml|yml)$/) && !filePath.match(/(?:iam|policy|role|permission)/i)) return [];
+      const patterns = [/["'`]Action["'`]\s*:\s*["'`]\*["'`]/g, /["'`]Resource["'`]\s*:\s*["'`]\*["'`]/g, /actions\s*=\s*\[\s*["'`]\*["'`]\s*\]/g, /role\s*[:=]\s*["'`]roles\/(?:owner|editor)["'`]/g];
+      const matches = [];
+      for (const p of patterns) {
+        matches.push(...findMatches(content, p, this, filePath, () =>
+          "Replace wildcard (*) with specific actions and resources (least privilege)."
+        ));
+      }
+      return matches;
+    },
+  },
+  {
+    id: "VC058", title: "Docker Container Running as Root", severity: "high", category: "Configuration",
+    description: "Containers running as root give attackers full system access on escape.",
+    check(content, filePath) {
+      if (!filePath.match(/Dockerfile$/i)) return [];
+      if (/^\s*USER\s+/m.test(content)) return [];
+      return [{ rule: "VC058", title: this.title, severity: "high", category: "Configuration", file: filePath, line: 1, snippet: getSnippet(content, 1),
+        fix: "Add USER directive: RUN addgroup -S app && adduser -S app -G app; USER app" }];
+    },
+  },
+  {
+    id: "VC059", title: "Docker Compose Binding to All Interfaces", severity: "medium", category: "Configuration",
+    description: "Binding ports to 0.0.0.0 exposes services to the entire network.",
+    check(content, filePath) {
+      if (!filePath.match(/docker-compose|compose\.(yaml|yml)$/i)) return [];
+      if (/ports:/i.test(content) && !/127\.0\.0\.1:/i.test(content)) {
+        return findMatches(content, /^\s*-\s*["'`]?\d+:\d+["'`]?/gm, this, filePath, () =>
+          "Bind to localhost: '127.0.0.1:3000:3000' instead of '3000:3000'."
+        );
+      }
+      return [];
+    },
+  },
+  {
+    id: "VC060", title: "Weak Hashing Algorithm for Passwords", severity: "critical", category: "Cryptography",
+    description: "MD5/SHA are too fast for passwords — use bcrypt, scrypt, or argon2.",
+    check(content, filePath) {
+      if (filePath.includes("test") || filePath.includes("mock")) return [];
+      const patterns = [
+        /(?:md5|sha1|sha256|sha512)\s*\([^)]*(?:password|passwd|pwd)/gi,
+        /createHash\s*\(\s*["'`](?:md5|sha1|sha256)["'`]\).*(?:password|passwd|pwd)/gi,
+        /(?:password|passwd|pwd).*createHash\s*\(\s*["'`](?:md5|sha1|sha256)["'`]\)/gi,
+        /hashlib\.(?:md5|sha1|sha256)\s*\([^)]*(?:password|passwd|pwd)/gi,
+      ];
+      const matches = [];
+      for (const p of patterns) {
+        matches.push(...findMatches(content, p, this, filePath, () =>
+          "Use bcrypt, scrypt, or argon2: await bcrypt.hash(password, 12)."
+        ));
+      }
+      return matches;
+    },
+  },
+  {
+    id: "VC061", title: "Disabled TLS Certificate Verification", severity: "critical", category: "Cryptography",
+    description: "Disabling TLS verification makes all HTTPS connections vulnerable to MITM attacks.",
+    check(content, filePath) {
+      const patterns = [/NODE_TLS_REJECT_UNAUTHORIZED\s*[:=]\s*["'`]?0["'`]?/g, /rejectUnauthorized\s*:\s*false/g, /ssl_verify\s*[:=]\s*false/gi, /InsecureSkipVerify\s*:\s*true/g, /PYTHONHTTPSVERIFY\s*[:=]\s*["'`]?0["'`]?/g];
+      const matches = [];
+      for (const p of patterns) {
+        matches.push(...findMatches(content, p, this, filePath, () =>
+          "Never disable TLS verification in production. Fix the root cause: install correct CA certificates."
+        ));
+      }
+      return matches;
+    },
+  },
+  {
+    id: "VC062", title: "Hardcoded Encryption Key or IV", severity: "critical", category: "Cryptography",
+    description: "Hardcoded encryption keys/IVs can be extracted to decrypt all data.",
+    check(content, filePath) {
+      if (filePath.endsWith(".example") || filePath.endsWith(".template") || filePath.includes("test")) return [];
+      const patterns = [
+        /(?:encryption_key|encryptionKey|cipher_key|cipherKey|aes_key|AES_KEY|ENCRYPTION_KEY)\s*[:=]\s*["'`][^"'`]{8,}["'`]/g,
+        /createCipher(?:iv)?\s*\(\s*["'`][^"'`]+["'`]\s*,\s*["'`][^"'`]+["'`]/g,
+        /(?:key|iv|nonce)\s*[:=]\s*Buffer\.from\s*\(\s*["'`][^"'`]{8,}["'`]/gi,
+        /(?:iv|nonce|initialVector)\s*[:=]\s*["'`][^"'`]{8,}["'`]/gi,
+      ];
+      const matches = [];
+      for (const p of patterns) {
+        matches.push(...findMatches(content, p, this, filePath, () =>
+          "Move encryption keys to env vars. Generate IVs randomly: crypto.randomBytes(16). Never reuse IVs."
+        ));
+      }
+      return matches;
+    },
+  },
 ];
 
 function runScan(files) {

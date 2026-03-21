@@ -1372,6 +1372,518 @@ const logInjection: CustomRule = {
 };
 
 // ────────────────────────────────────────────
+// VC045 – Weak Password Requirements
+// ────────────────────────────────────────────
+
+const weakPasswordRequirements: CustomRule = {
+  id: "VC045",
+  title: "Weak Password Requirements",
+  severity: "high",
+  category: "Authentication",
+  description: "Registration or password-change endpoints without minimum length or complexity validation allow weak passwords that are easily brute-forced.",
+  check(content, filePath) {
+    if (!/(?:password|passwd|pwd)/i.test(content)) return [];
+    if (!/(?:register|signup|sign.up|createUser|create.user|changePassword|resetPassword|set.password)/i.test(content) &&
+        !/(?:\/api\/|routes?\/|controllers?\/)/i.test(filePath)) return [];
+    const hasValidation = /(?:password|pwd).*(?:\.length|minLength|minlength|min_length)\s*(?:>=?|<|>)\s*\d|(?:password|pwd).*(?:match|test|regex|pattern)|zxcvbn|password-validator|passwordStrength|isStrongPassword/i.test(content);
+    if (hasValidation) return [];
+    const hasPasswordHandling = /(?:password|pwd)\s*[:=]\s*(?:req\.body|body|input|params|args)\./i.test(content);
+    if (!hasPasswordHandling) return [];
+    return findMatches(content, /(?:password|pwd)\s*[:=]\s*(?:req\.body|body|input|params|args)\./gi, weakPasswordRequirements, filePath, () =>
+      "Enforce minimum password requirements: at least 8 characters, mix of letters/numbers/symbols. Use a library like zxcvbn for strength estimation."
+    );
+  },
+};
+
+// ────────────────────────────────────────────
+// VC046 – Session Fixation
+// ────────────────────────────────────────────
+
+const sessionFixation: CustomRule = {
+  id: "VC046",
+  title: "Session Fixation Risk",
+  severity: "high",
+  category: "Authentication",
+  description: "Not regenerating session IDs after login allows attackers to pre-set a session ID and hijack the authenticated session.",
+  check(content, filePath) {
+    if (!/(?:login|signin|sign.in|authenticate)/i.test(content)) return [];
+    if (!/session/i.test(content)) return [];
+    const hasRegenerate = /regenerate|destroy.*create|req\.session\.id\s*=|session\.regenerateId|rotateSession/i.test(content);
+    if (hasRegenerate) return [];
+    const hasLogin = /(?:login|signin|authenticate)\s*(?:=|:|\()/i.test(content);
+    if (!hasLogin) return [];
+    return findMatches(content, /(?:login|signin|authenticate)\s*(?:=|:|\()/gi, sessionFixation, filePath, () =>
+      "Regenerate the session ID after successful login: req.session.regenerate() (Express) or equivalent. This prevents session fixation attacks."
+    );
+  },
+};
+
+// ────────────────────────────────────────────
+// VC047 – Missing Brute Force Protection
+// ────────────────────────────────────────────
+
+const missingBruteForce: CustomRule = {
+  id: "VC047",
+  title: "Login Without Brute Force Protection",
+  severity: "high",
+  category: "Authentication",
+  description: "Login endpoints without rate limiting, account lockout, or progressive delays are vulnerable to credential stuffing and brute force attacks.",
+  check(content, filePath) {
+    const isLoginFile = /(?:login|signin|sign.in|auth)/i.test(filePath) || /(?:login|signin|authenticate).*(?:post|handler|route)/i.test(content);
+    if (!isLoginFile) return [];
+    if (!/(?:password|credential)/i.test(content)) return [];
+    const hasBruteForce = /rate.?limit|throttle|lockout|maxAttempts|max_attempts|failedAttempts|loginAttempts|brute|express-brute|express-rate-limit|slowDown/i.test(content);
+    if (hasBruteForce) return [];
+    return findMatches(content, /\.(post|handler)\s*\([^)]*(?:login|signin|auth)/gi, missingBruteForce, filePath, () =>
+      "Add brute force protection to login endpoints: rate limiting (5 attempts/minute), progressive delays, or account lockout after N failures. Use express-rate-limit or similar."
+    );
+  },
+};
+
+// ────────────────────────────────────────────
+// VC048 – NoSQL Injection
+// ────────────────────────────────────────────
+
+const nosqlInjection: CustomRule = {
+  id: "VC048",
+  title: "Potential NoSQL Injection",
+  severity: "critical",
+  category: "Injection",
+  description: "Passing unsanitized user input directly into MongoDB/NoSQL queries allows attackers to bypass authentication, extract data, or modify queries using operators like $gt, $ne, $regex.",
+  check(content, filePath) {
+    if (!/(?:mongo|mongoose|findOne|findById|find\(|collection|aggregate)/i.test(content)) return [];
+    const matches: RuleMatch[] = [];
+    const patterns = [
+      // Direct req.body in MongoDB queries
+      /\.find(?:One)?\s*\(\s*(?:req\.body|body|input|params)\s*\)/gi,
+      /\.find(?:One)?\s*\(\s*\{[^}]*:\s*(?:req\.body|body|input|params)\./gi,
+      // $where with user input
+      /\$where\s*:\s*(?!["'`])/g,
+      // Direct variable in query without sanitization
+      /\.(?:findOne|findById|deleteOne|updateOne|findOneAndUpdate)\s*\(\s*\{[^}]*:\s*(?:req\.(?:body|query|params))\./gi,
+    ];
+    const hasSanitization = /sanitize|escape|mongo-sanitize|express-mongo-sanitize|validator|typeof.*===.*string/i.test(content);
+    if (hasSanitization) return [];
+    for (const p of patterns) {
+      matches.push(...findMatches(content, p, nosqlInjection, filePath, () =>
+        "Sanitize MongoDB query inputs: use express-mongo-sanitize, validate types (ensure strings aren't objects), and avoid $where. Example: if (typeof input !== 'string') throw new Error('Invalid input');"
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC049 – Exposed DB Credentials in Config
+// ────────────────────────────────────────────
+
+const exposedDBCredentials: CustomRule = {
+  id: "VC049",
+  title: "Database Credentials in Config File",
+  severity: "critical",
+  category: "Secrets",
+  description: "Database connection strings with embedded usernames and passwords in committed config files expose credentials to anyone with repo access.",
+  check(content, filePath) {
+    if (filePath.endsWith(".example") || filePath.endsWith(".template")) return [];
+    if (!filePath.match(/(?:config|setting|database|db|knexfile|sequelize|drizzle|prisma)/i) && !filePath.match(/\.(json|yaml|yml|toml|js|ts)$/)) return [];
+    if (filePath.match(/\.env/)) return []; // Handled by VC002
+    const patterns = [
+      // Connection strings with credentials
+      /(?:host|server|database|db).*(?:password|passwd|pwd)\s*[:=]\s*["'`][^"'`]{3,}["'`]/gi,
+      // Inline connection URLs with credentials
+      /(?:connection|database|db).*(?:postgres|mysql|mongodb|redis):\/\/[^:]+:[^@]+@/gi,
+    ];
+    const matches: RuleMatch[] = [];
+    for (const p of patterns) {
+      matches.push(...findMatches(content, p, exposedDBCredentials, filePath, () =>
+        "Move database credentials to environment variables. Use: process.env.DATABASE_URL instead of hardcoding connection strings in config files."
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC050 – Missing DB Connection Encryption
+// ────────────────────────────────────────────
+
+const missingDBEncryption: CustomRule = {
+  id: "VC050",
+  title: "Database Connection Without SSL/TLS",
+  severity: "high",
+  category: "Configuration",
+  description: "Database connections without SSL/TLS encryption transmit credentials and data in plaintext, allowing eavesdropping on the network.",
+  check(content, filePath) {
+    if (!/(?:createConnection|createPool|createClient|connect|new.*Client|knex|sequelize|drizzle)/i.test(content)) return [];
+    if (!/(?:postgres|mysql|mariadb|pg|mongo)/i.test(content)) return [];
+    const matches: RuleMatch[] = [];
+    // SSL explicitly disabled
+    const sslDisabled = [
+      /ssl\s*:\s*false/gi,
+      /sslmode\s*[:=]\s*["'`]?disable["'`]?/gi,
+      /rejectUnauthorized\s*:\s*false/gi,
+    ];
+    for (const p of sslDisabled) {
+      matches.push(...findMatches(content, p, missingDBEncryption, filePath, () =>
+        "Enable SSL/TLS for database connections: { ssl: { rejectUnauthorized: true } }. In production, always verify server certificates."
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC051 – GraphQL Introspection Enabled
+// ────────────────────────────────────────────
+
+const graphqlIntrospection: CustomRule = {
+  id: "VC051",
+  title: "GraphQL Introspection Enabled in Production",
+  severity: "medium",
+  category: "Information Leakage",
+  description: "GraphQL introspection exposes your entire API schema, types, queries, and mutations to attackers, making it easy to find attack vectors.",
+  check(content, filePath) {
+    if (!/graphql/i.test(content) && !/graphql/i.test(filePath)) return [];
+    const matches: RuleMatch[] = [];
+    // Introspection explicitly enabled or not disabled
+    if (/introspection\s*:\s*true/i.test(content)) {
+      matches.push(...findMatches(content, /introspection\s*:\s*true/gi, graphqlIntrospection, filePath, () =>
+        "Disable GraphQL introspection in production: introspection: process.env.NODE_ENV !== 'production'. This prevents schema exposure."
+      ));
+    }
+    // GraphQL server setup without introspection config
+    if (/(?:ApolloServer|GraphQLServer|createYoga|buildSchema|makeExecutableSchema)\s*\(/i.test(content)) {
+      if (!/introspection/i.test(content)) {
+        matches.push(...findMatches(content, /(?:ApolloServer|GraphQLServer|createYoga)\s*\(/gi, graphqlIntrospection, filePath, () =>
+          "Explicitly disable introspection in production: new ApolloServer({ introspection: process.env.NODE_ENV !== 'production' })"
+        ));
+      }
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC052 – Missing Request Size Limit
+// ────────────────────────────────────────────
+
+const missingRequestSizeLimit: CustomRule = {
+  id: "VC052",
+  title: "Missing Request Body Size Limit",
+  severity: "medium",
+  category: "Availability",
+  description: "Express/Hono/Fastify servers without request body size limits are vulnerable to denial-of-service via oversized payloads that exhaust memory.",
+  check(content, filePath) {
+    if (!/(?:server|app|index|main)\.[jt]sx?$/.test(filePath)) return [];
+    if (!/(?:express|hono|fastify|koa)/i.test(content)) return [];
+    const matches: RuleMatch[] = [];
+    // express.json() without limit
+    if (/express\.json\s*\(\s*\)/g.test(content)) {
+      matches.push(...findMatches(content, /express\.json\s*\(\s*\)/g, missingRequestSizeLimit, filePath, () =>
+        "Set a body size limit: express.json({ limit: '1mb' }). Without this, attackers can send huge payloads to crash your server."
+      ));
+    }
+    // bodyParser without limit
+    if (/bodyParser\.json\s*\(\s*\)/g.test(content)) {
+      matches.push(...findMatches(content, /bodyParser\.json\s*\(\s*\)/g, missingRequestSizeLimit, filePath, () =>
+        "Set a body size limit: bodyParser.json({ limit: '1mb' })."
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC053 – Hardcoded IP/Host Allowlist
+// ────────────────────────────────────────────
+
+const hardcodedIPAllowlist: CustomRule = {
+  id: "VC053",
+  title: "Hardcoded IP or Host Allowlist",
+  severity: "medium",
+  category: "Configuration",
+  description: "Hardcoded IP addresses or hostnames in allowlists are brittle and hard to update. They should be in environment variables or configuration files.",
+  check(content, filePath) {
+    if (filePath.includes("test") || filePath.includes("mock") || filePath.match(/\.(md|txt)$/)) return [];
+    const matches: RuleMatch[] = [];
+    // Arrays of IPs used in access control
+    const patterns = [
+      /(?:allowedIPs|allowed_ips|whitelist|allowlist|trustedHosts)\s*[:=]\s*\[\s*["'`]\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/gi,
+      /(?:allowedIPs|allowed_ips|whitelist|allowlist|trustedHosts)\s*[:=]\s*\[\s*["'`][\w.-]+\.(?:com|net|org|io)/gi,
+    ];
+    for (const p of patterns) {
+      matches.push(...findMatches(content, p, hardcodedIPAllowlist, filePath, () =>
+        "Move IP/host allowlists to environment variables or a config file: const allowed = process.env.ALLOWED_IPS?.split(',') || [];"
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC054 – Sensitive Data in localStorage
+// ────────────────────────────────────────────
+
+const sensitiveLocalStorage: CustomRule = {
+  id: "VC054",
+  title: "Sensitive Data in localStorage",
+  severity: "high",
+  category: "Secrets",
+  description: "Storing tokens, passwords, or secrets in localStorage is insecure — it's accessible to any JavaScript on the page (XSS) and persists indefinitely. Use httpOnly cookies instead.",
+  check(content, filePath) {
+    if (!filePath.match(/\.(jsx?|tsx?|vue|svelte)$/)) return [];
+    const matches: RuleMatch[] = [];
+    const patterns = [
+      /localStorage\.setItem\s*\(\s*["'`](?:token|access_token|auth_token|jwt|session|refresh_token|api_key|password|secret)/gi,
+      /localStorage\s*\[\s*["'`](?:token|access_token|auth_token|jwt|session|refresh_token|api_key|password|secret)/gi,
+    ];
+    for (const p of patterns) {
+      matches.push(...findMatches(content, p, sensitiveLocalStorage, filePath, () =>
+        "Don't store tokens/secrets in localStorage — use httpOnly cookies instead. localStorage is accessible to any XSS attack. For session tokens, set them as httpOnly, secure, sameSite cookies."
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC055 – Exposed Source Maps in Production
+// ────────────────────────────────────────────
+
+const exposedSourceMaps: CustomRule = {
+  id: "VC055",
+  title: "Source Maps Exposed in Production",
+  severity: "medium",
+  category: "Information Leakage",
+  description: "Source map files (.map) in production expose your original source code, comments, and internal logic to anyone who downloads them.",
+  check(content, filePath) {
+    // Check build configs for source maps in production
+    if (!filePath.match(/(?:webpack|vite|rollup|next)\.config|tsconfig/i)) return [];
+    const matches: RuleMatch[] = [];
+    // Source maps enabled without environment check
+    if (/(?:sourceMap|source-map|sourcemap)\s*[:=]\s*true/i.test(content)) {
+      const hasEnvCheck = /process\.env\.NODE_ENV|NODE_ENV|production/i.test(content);
+      if (!hasEnvCheck) {
+        matches.push(...findMatches(content, /(?:sourceMap|source-map|sourcemap)\s*[:=]\s*true/gi, exposedSourceMaps, filePath, () =>
+          "Disable source maps in production builds: sourceMap: process.env.NODE_ENV !== 'production'. Or use 'hidden-source-map' to generate maps without exposing them."
+        ));
+      }
+    }
+    // productionSourceMap in Vue
+    if (/productionSourceMap\s*:\s*true/i.test(content)) {
+      matches.push(...findMatches(content, /productionSourceMap\s*:\s*true/gi, exposedSourceMaps, filePath, () =>
+        "Set productionSourceMap: false to avoid exposing source code in production."
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC056 – Clickjacking / Missing X-Frame-Options
+// ────────────────────────────────────────────
+
+const clickjacking: CustomRule = {
+  id: "VC056",
+  title: "Clickjacking — Missing X-Frame-Options",
+  severity: "medium",
+  category: "Configuration",
+  description: "Without X-Frame-Options or frame-ancestors CSP directive, your page can be embedded in an attacker's iframe for UI redress (clickjacking) attacks.",
+  check(content, filePath) {
+    // Check HTML files
+    if (filePath.match(/\.(html|htm)$/)) {
+      if (!/X-Frame-Options|frame-ancestors/i.test(content)) {
+        return [{
+          rule: "VC056", title: clickjacking.title, severity: "medium" as const, category: "Configuration",
+          file: filePath, line: 1, snippet: getSnippet(content, 1),
+          fix: 'Add <meta http-equiv="X-Frame-Options" content="DENY"> or set frame-ancestors in CSP to prevent clickjacking.'
+        }];
+      }
+    }
+    // Check server configs
+    if (/(?:server|app|index|main)\.[jt]sx?$/.test(filePath)) {
+      if (/(?:express|hono|fastify|koa)/i.test(content)) {
+        if (!/X-Frame-Options|frame-ancestors|helmet/i.test(content)) {
+          return findMatches(content, /(?:express|hono|fastify|koa)\s*\(/gi, clickjacking, filePath, () =>
+            "Add X-Frame-Options header: res.setHeader('X-Frame-Options', 'DENY'). Or use helmet: app.use(helmet()) which sets this and other security headers."
+          );
+        }
+      }
+    }
+    return [];
+  },
+};
+
+// ────────────────────────────────────────────
+// VC057 – Overly Permissive IAM/Cloud Roles
+// ────────────────────────────────────────────
+
+const overlyPermissiveIAM: CustomRule = {
+  id: "VC057",
+  title: "Overly Permissive IAM/Cloud Permissions",
+  severity: "critical",
+  category: "Authorization",
+  description: "Wildcard (*) permissions in AWS IAM, GCP, or Terraform configs grant unrestricted access, violating the principle of least privilege.",
+  check(content, filePath) {
+    if (!filePath.match(/\.(tf|hcl|json|yaml|yml)$/) && !filePath.match(/(?:iam|policy|role|permission)/i)) return [];
+    const matches: RuleMatch[] = [];
+    const patterns = [
+      // AWS IAM wildcard
+      /["'`]Action["'`]\s*:\s*["'`]\*["'`]/g,
+      /["'`]Resource["'`]\s*:\s*["'`]\*["'`]/g,
+      // Terraform aws_iam
+      /actions\s*=\s*\[\s*["'`]\*["'`]\s*\]/g,
+      /resources\s*=\s*\[\s*["'`]\*["'`]\s*\]/g,
+      // GCP bindings
+      /role\s*[:=]\s*["'`]roles\/(?:owner|editor)["'`]/g,
+    ];
+    for (const p of patterns) {
+      matches.push(...findMatches(content, p, overlyPermissiveIAM, filePath, () =>
+        "Follow the principle of least privilege: replace wildcard (*) with specific actions and resources. Example: 'Action': 's3:GetObject' instead of '*'."
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC058 – Docker Running as Root
+// ────────────────────────────────────────────
+
+const dockerRunAsRoot: CustomRule = {
+  id: "VC058",
+  title: "Docker Container Running as Root",
+  severity: "high",
+  category: "Configuration",
+  description: "Containers running as root give attackers full system access if they escape the container. Always run as a non-root user.",
+  check(content, filePath) {
+    if (!filePath.match(/Dockerfile$/i)) return [];
+    const hasUser = /^\s*USER\s+/m.test(content);
+    if (hasUser) return [];
+    return [{
+      rule: "VC058", title: dockerRunAsRoot.title, severity: "high" as const, category: "Configuration",
+      file: filePath, line: 1, snippet: getSnippet(content, 1),
+      fix: "Add a USER directive: RUN addgroup -S app && adduser -S app -G app\\nUSER app. Place it after installing dependencies but before COPY/CMD."
+    }];
+  },
+};
+
+// ────────────────────────────────────────────
+// VC059 – Exposed Ports in Docker Compose
+// ────────────────────────────────────────────
+
+const exposedDockerPorts: CustomRule = {
+  id: "VC059",
+  title: "Docker Compose Binding to All Interfaces",
+  severity: "medium",
+  category: "Configuration",
+  description: "Binding ports to 0.0.0.0 (default) in Docker Compose exposes services to the entire network. Bind to 127.0.0.1 for local-only access.",
+  check(content, filePath) {
+    if (!filePath.match(/docker-compose|compose\.(yaml|yml)$/i)) return [];
+    const matches: RuleMatch[] = [];
+    // ports: "3000:3000" or "8080:80" without binding to 127.0.0.1
+    const portPattern = /ports:\s*\n(?:\s*-\s*["'`]?\d+:\d+["'`]?\s*\n?)+/g;
+    if (portPattern.test(content) && !/127\.0\.0\.1:/i.test(content)) {
+      matches.push(...findMatches(content, /^\s*-\s*["'`]?\d+:\d+["'`]?/gm, exposedDockerPorts, filePath, () =>
+        "Bind to localhost only: '127.0.0.1:3000:3000' instead of '3000:3000'. This prevents external network access to the service."
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC060 – Weak Hashing Algorithm
+// ────────────────────────────────────────────
+
+const weakHashing: CustomRule = {
+  id: "VC060",
+  title: "Weak Hashing Algorithm for Passwords",
+  severity: "critical",
+  category: "Cryptography",
+  description: "MD5 and SHA1/SHA256 are too fast for password hashing — they can be brute-forced at billions of attempts per second. Use bcrypt, scrypt, or argon2 instead.",
+  check(content, filePath) {
+    if (filePath.includes("test") || filePath.includes("mock")) return [];
+    const matches: RuleMatch[] = [];
+    // MD5/SHA used with password context
+    const patterns = [
+      /(?:md5|sha1|sha256|sha512)\s*\([^)]*(?:password|passwd|pwd)/gi,
+      /createHash\s*\(\s*["'`](?:md5|sha1|sha256)["'`]\).*(?:password|passwd|pwd)/gi,
+      /(?:password|passwd|pwd).*createHash\s*\(\s*["'`](?:md5|sha1|sha256)["'`]\)/gi,
+      /hashlib\.(?:md5|sha1|sha256)\s*\([^)]*(?:password|passwd|pwd)/gi,
+      /Digest::(?:MD5|SHA1|SHA256).*(?:password|passwd|pwd)/gi,
+    ];
+    for (const p of patterns) {
+      matches.push(...findMatches(content, p, weakHashing, filePath, () =>
+        "Use bcrypt, scrypt, or argon2 for password hashing — they're intentionally slow. Example: const hash = await bcrypt.hash(password, 12);"
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC061 – Disabled TLS Certificate Verification
+// ────────────────────────────────────────────
+
+const disabledTLSVerification: CustomRule = {
+  id: "VC061",
+  title: "Disabled TLS Certificate Verification",
+  severity: "critical",
+  category: "Cryptography",
+  description: "Disabling TLS certificate verification (NODE_TLS_REJECT_UNAUTHORIZED=0 or rejectUnauthorized:false) makes all HTTPS connections vulnerable to man-in-the-middle attacks.",
+  check(content, filePath) {
+    const matches: RuleMatch[] = [];
+    const patterns = [
+      /NODE_TLS_REJECT_UNAUTHORIZED\s*[:=]\s*["'`]?0["'`]?/g,
+      /rejectUnauthorized\s*:\s*false/g,
+      /verify\s*[:=]\s*false.*(?:ssl|tls|cert|https)/gi,
+      /PYTHONHTTPSVERIFY\s*[:=]\s*["'`]?0["'`]?/g,
+      /ssl_verify\s*[:=]\s*false/gi,
+      /InsecureSkipVerify\s*:\s*true/g,
+    ];
+    for (const p of patterns) {
+      matches.push(...findMatches(content, p, disabledTLSVerification, filePath, () =>
+        "Never disable TLS certificate verification in production. Fix the root cause: install the correct CA certificate, or use NODE_EXTRA_CA_CERTS for custom CAs."
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC062 – Hardcoded Encryption Key/IV
+// ────────────────────────────────────────────
+
+const hardcodedEncryptionKey: CustomRule = {
+  id: "VC062",
+  title: "Hardcoded Encryption Key or IV",
+  severity: "critical",
+  category: "Cryptography",
+  description: "Hardcoded encryption keys and initialization vectors (IVs) in source code can be extracted to decrypt all data. IVs must be random per encryption operation.",
+  check(content, filePath) {
+    if (filePath.endsWith(".example") || filePath.endsWith(".template") || filePath.includes("test")) return [];
+    const matches: RuleMatch[] = [];
+    const patterns = [
+      // Encryption key as string literal
+      /(?:encryption_key|encryptionKey|cipher_key|cipherKey|aes_key|AES_KEY|ENCRYPTION_KEY)\s*[:=]\s*["'`][^"'`]{8,}["'`]/g,
+      // createCipheriv with hardcoded key
+      /createCipher(?:iv)?\s*\(\s*["'`][^"'`]+["'`]\s*,\s*["'`][^"'`]+["'`]/g,
+      // Buffer.from with hardcoded key near cipher
+      /(?:key|iv|nonce)\s*[:=]\s*Buffer\.from\s*\(\s*["'`][^"'`]{8,}["'`]/gi,
+      // Static IV (should be random)
+      /(?:iv|nonce|initialVector)\s*[:=]\s*["'`][^"'`]{8,}["'`]/gi,
+    ];
+    for (const p of patterns) {
+      matches.push(...findMatches(content, p, hardcodedEncryptionKey, filePath, () =>
+        "Move encryption keys to environment variables. Generate IVs randomly per operation: crypto.randomBytes(16). Never reuse IVs."
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
 // EXPORT ALL RULES
 // ────────────────────────────────────────────
 
@@ -1420,6 +1932,24 @@ export const allRules: CustomRule[] = [
   massAssignment,
   timingAttack,
   logInjection,
+  weakPasswordRequirements,
+  sessionFixation,
+  missingBruteForce,
+  nosqlInjection,
+  exposedDBCredentials,
+  missingDBEncryption,
+  graphqlIntrospection,
+  missingRequestSizeLimit,
+  hardcodedIPAllowlist,
+  sensitiveLocalStorage,
+  exposedSourceMaps,
+  clickjacking,
+  overlyPermissiveIAM,
+  dockerRunAsRoot,
+  exposedDockerPorts,
+  weakHashing,
+  disabledTLSVerification,
+  hardcodedEncryptionKey,
 ];
 
 export function runCustomRules(
