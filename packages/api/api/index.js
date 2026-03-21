@@ -559,6 +559,247 @@ const rules = [
       return matches;
     },
   },
+  {
+    id: "VC030", title: "Insecure Deserialization", severity: "critical", category: "Injection",
+    description: "Deserializing untrusted data (pickle, unserialize, yaml.load) can execute arbitrary code.",
+    check(content, filePath) {
+      const patterns = [/pickle\.loads?\s*\(/g, /cPickle\.loads?\s*\(/g, /unserialize\s*\(/g, /Marshal\.load\s*\(/g, /yaml\.load\s*\([^)]*(?!Loader\s*=\s*yaml\.SafeLoader)/g, /yaml\.unsafe_load\s*\(/g, /ObjectInputStream\s*\(/g, /serialize\.unserialize\s*\(/g];
+      const matches = [];
+      for (const p of patterns) {
+        matches.push(...findMatches(content, p, this, filePath, () =>
+          "Never deserialize untrusted data. Use JSON instead of pickle/Marshal/unserialize. For YAML, use yaml.safe_load()."
+        ));
+      }
+      return matches;
+    },
+  },
+  {
+    id: "VC031", title: "Hardcoded JWT Secret", severity: "critical", category: "Secrets",
+    description: "JWT tokens signed with a hardcoded string secret can be forged by anyone who reads the source code.",
+    check(content, filePath) {
+      if (filePath.endsWith(".example") || filePath.endsWith(".template") || filePath.includes("test")) return [];
+      const patterns = [/jwt\.sign\s*\([^,]+,\s*["'`][^"'`]{3,}["'`]/g, /jwt\.verify\s*\([^,]+,\s*["'`][^"'`]{3,}["'`]/g, /JWT_SECRET\s*[:=]\s*["'`][^"'`]{3,}["'`]/g];
+      const matches = [];
+      for (const p of patterns) {
+        matches.push(...findMatches(content, p, this, filePath, () =>
+          "Move JWT secret to an environment variable: jwt.sign(payload, process.env.JWT_SECRET). Use a strong, random secret (256+ bits)."
+        ));
+      }
+      return matches;
+    },
+  },
+  {
+    id: "VC032", title: "Missing HTTPS Enforcement", severity: "high", category: "Configuration",
+    description: "HTTP URLs in production code expose data to man-in-the-middle attacks.",
+    check(content, filePath) {
+      if (filePath.endsWith(".example") || filePath.includes("test") || filePath.match(/\.(md|txt)$/)) return [];
+      const httpPattern = /["'`]http:\/\/(?!localhost|127\.0\.0\.1|0\.0\.0\.0|192\.168\.|10\.|172\.(?:1[6-9]|2\d|3[01])\.)[^"'`\s]+["'`]/g;
+      return findMatches(content, httpPattern, this, filePath, () =>
+        "Use https:// instead of http:// for all production URLs. Add HSTS header."
+      );
+    },
+  },
+  {
+    id: "VC033", title: "Debug/Development Mode Exposed", severity: "high", category: "Configuration",
+    description: "Debug mode or development config left in production exposes internal details.",
+    check(content, filePath) {
+      if (filePath.includes("test") || filePath.endsWith(".example") || filePath.match(/\.env\.development$/)) return [];
+      const patterns = [/DEBUG\s*[:=]\s*(?:true|1|["'`]true["'`]|["'`]\*["'`])/g, /DEBUG\s*=\s*True/g, /app\.debug\s*=\s*True/g, /app\.run\s*\([^)]*debug\s*=\s*True/g, /devtool\s*:\s*["'`](?:eval|cheap|source-map|inline-source-map)["'`]/g];
+      const matches = [];
+      for (const p of patterns) {
+        matches.push(...findMatches(content, p, this, filePath, () =>
+          "Disable debug mode in production. Use environment variables: DEBUG = process.env.NODE_ENV !== 'production'."
+        ));
+      }
+      return matches;
+    },
+  },
+  {
+    id: "VC034", title: "Insecure Randomness for Security-Sensitive Values", severity: "high", category: "Cryptography",
+    description: "Math.random() is not cryptographically secure. Using it for tokens, IDs, or passwords makes them predictable.",
+    check(content, filePath) {
+      if (filePath.includes("test") || filePath.includes("mock") || filePath.includes("seed")) return [];
+      const matches = [];
+      matches.push(...findMatches(content, /(?:token|secret|session|password|otp|nonce|salt|key|csrf|auth|verify|code)\s*[:=].*Math\.random/gi, this, filePath, () =>
+        "Use crypto.randomUUID() or crypto.getRandomValues() for security-sensitive values."
+      ));
+      matches.push(...findMatches(content, /(?:id|uuid|guid|identifier)\s*[:=].*Math\.random/gi, this, filePath, () =>
+        "Use crypto.randomUUID() for generating unique IDs."
+      ));
+      return matches;
+    },
+  },
+  {
+    id: "VC035", title: "Open Redirect via URL Parameters", severity: "high", category: "Injection",
+    description: "Redirect parameters like ?redirect_url= passed directly to redirects enable phishing.",
+    check(content, filePath) {
+      if (/allowedUrls|allowedDomains|allowedHosts|safeDomain|whitelist|startsWith.*https|new URL.*hostname/i.test(content)) return [];
+      const patterns = [
+        /(?:redirect_url|redirect_uri|return_to|return_url|next|callback_url|continue|goto|target|dest|destination)\s*(?:=|:)\s*(?:req\.query|req\.params|searchParams|query|params)\./gi,
+        /redirect\s*\(\s*(?:req\.query|req\.params|searchParams\.get)\s*\(\s*["'`](?:redirect|return|next|callback|url|goto)/gi,
+      ];
+      const matches = [];
+      for (const p of patterns) {
+        matches.push(...findMatches(content, p, this, filePath, () =>
+          "Validate redirect URLs against an allowlist of trusted domains."
+        ));
+      }
+      return matches;
+    },
+  },
+  {
+    id: "VC036", title: "React App Missing Error Boundary", severity: "medium", category: "Configuration",
+    description: "React apps without error boundaries display raw stack traces to users when crashes occur.",
+    check(content, filePath) {
+      if (!filePath.match(/(?:layout|_app|App|main)\.[jt]sx?$/)) return [];
+      if (!/(?:React|react|jsx|tsx)/i.test(content)) return [];
+      if (/ErrorBoundary|componentDidCatch|getDerivedStateFromError|error-boundary/i.test(content)) return [];
+      if (/children|<[A-Z]|Component|Outlet/i.test(content)) {
+        return [{ rule: "VC036", title: this.title, severity: "medium", category: "Configuration", file: filePath, line: 1, snippet: getSnippet(content, 1),
+          fix: "Wrap your app in an ErrorBoundary component." }];
+      }
+      return [];
+    },
+  },
+  {
+    id: "VC037", title: "Stack Traces Exposed in API Responses", severity: "medium", category: "Information Leakage",
+    description: "Returning error.stack in API responses reveals internal code paths to attackers.",
+    check(content, filePath) {
+      if (!/(?:\/api\/|routes?\/|controllers?\/|server\.|middleware)/i.test(filePath)) return [];
+      if (/process\.env\.NODE_ENV\s*(?:===|!==)\s*["'`]production["'`]/i.test(content)) return [];
+      const patterns = [
+        /(?:res\.(?:json|send|status)|c\.json|return.*json)\s*\([^)]*(?:err\.stack|error\.stack|e\.stack)/gi,
+        /(?:message|error)\s*:\s*(?:err|error|e)\.(?:stack|message)/gi,
+      ];
+      const matches = [];
+      for (const p of patterns) {
+        matches.push(...findMatches(content, p, this, filePath, () =>
+          "Never expose error.stack to clients. Return generic messages: { error: 'Something went wrong' }."
+        ));
+      }
+      return matches;
+    },
+  },
+  {
+    id: "VC038", title: "Insecure File Upload Validation", severity: "high", category: "Injection",
+    description: "File uploads validated only by extension (not MIME type) allow uploading executable files.",
+    check(content, filePath) {
+      if (!/upload|multer|formidable|busboy|multipart/i.test(content)) return [];
+      const hasExtCheck = /\.(?:endsWith|match|test)\s*\([^)]*(?:\.jpg|\.png|\.pdf|\.doc|ext)/i.test(content);
+      const hasMimeCheck = /mimetype|content-type|file\.type|mime|magic\.detect|file-type/i.test(content);
+      if (hasExtCheck && !hasMimeCheck) {
+        return findMatches(content, /upload|multer|formidable|busboy/gi, this, filePath, () =>
+          "Validate uploads by MIME type AND magic bytes, not just extension. Use the 'file-type' package."
+        );
+      }
+      return [];
+    },
+  },
+  {
+    id: "VC039", title: "Missing Dependency Lock File", severity: "medium", category: "Supply Chain",
+    description: "Without a lockfile, dependency versions are unpinned and vulnerable to supply chain attacks.",
+    check(content, filePath) {
+      if (!filePath.endsWith(".gitignore")) return [];
+      if (/package-lock\.json|pnpm-lock\.yaml|yarn\.lock/i.test(content)) {
+        return findMatches(content, /(?:package-lock\.json|pnpm-lock\.yaml|yarn\.lock)/gi, this, filePath, () =>
+          "Remove the lockfile from .gitignore. Lockfiles should be committed."
+        );
+      }
+      return [];
+    },
+  },
+  {
+    id: "VC040", title: "Exposed .git Directory via Web Server", severity: "critical", category: "Information Leakage",
+    description: "Web server configs that don't block .git access expose your entire source code and history.",
+    check(content, filePath) {
+      if (!filePath.match(/(?:nginx|apache|httpd|caddy|\.htaccess|vercel\.json|netlify\.toml|server\.[jt]s)/i)) return [];
+      if (/(?:static|serve|express\.static|serveStatic|public)/i.test(content)) {
+        if (!/\.git|dotfiles|hidden/i.test(content)) {
+          return findMatches(content, /(?:static|serve|express\.static|serveStatic)\s*\(/g, this, filePath, () =>
+            "Block access to .git in your static server config. For Express: app.use('/.git', (req, res) => res.status(403).end())"
+          );
+        }
+      }
+      return [];
+    },
+  },
+  {
+    id: "VC041", title: "Potential Server-Side Request Forgery (SSRF)", severity: "critical", category: "Injection",
+    description: "Fetching URLs from user input without validation allows access to internal services and cloud metadata.",
+    check(content, filePath) {
+      if (filePath.includes("test") || filePath.includes("mock")) return [];
+      if (/allowedHosts|allowedDomains|allowedUrls|safeDomain|whitelist|urlValidator|isAllowedUrl/i.test(content)) return [];
+      const patterns = [
+        /(?:fetch|axios\.get|axios\.post|axios|got|request|http\.get|https\.get)\s*\(\s*(?:req\.(?:body|query|params)|body|input|params|args)\./gi,
+      ];
+      const matches = [];
+      for (const p of patterns) {
+        matches.push(...findMatches(content, p, this, filePath, () =>
+          "Validate URLs against an allowlist. Block internal IPs: 127.0.0.1, 10.x, 172.16-31.x, 192.168.x, 169.254.169.254."
+        ));
+      }
+      return matches;
+    },
+  },
+  {
+    id: "VC042", title: "Mass Assignment Vulnerability", severity: "high", category: "Authorization",
+    description: "Spreading request body directly into database models allows attackers to set fields they shouldn't (isAdmin, role).",
+    check(content, filePath) {
+      if (!/(?:\/api\/|routes?\/|controllers?\/|server\.|handler)/i.test(filePath)) return [];
+      if (/pick\(|omit\(|allowedFields|sanitize|whitelist|permit|strong_params/i.test(content)) return [];
+      const patterns = [
+        /Object\.assign\s*\(\s*(?:user|account|profile|record|doc|model|entity)[^,]*,\s*(?:req\.body|body|input|data)\s*\)/gi,
+        /(?:create|update|insert|save|findOneAndUpdate|updateOne|upsert)\s*\(\s*\{[^}]*\.\.\.(?:req\.body|body|input|data)/gi,
+        /(?:create|insert|save)\s*\(\s*(?:req\.body|body)\s*\)/gi,
+      ];
+      const matches = [];
+      for (const p of patterns) {
+        matches.push(...findMatches(content, p, this, filePath, () =>
+          "Never pass req.body directly to DB. Pick allowed fields: const { name, email } = req.body;"
+        ));
+      }
+      return matches;
+    },
+  },
+  {
+    id: "VC043", title: "Timing-Unsafe Secret Comparison", severity: "medium", category: "Cryptography",
+    description: "Using === to compare secrets leaks info via timing side-channels.",
+    check(content, filePath) {
+      if (filePath.includes("test") || filePath.includes("mock")) return [];
+      if (/timingSafeEqual|constantTimeEqual|safeCompare|secureCompare/i.test(content)) return [];
+      const patterns = [
+        /(?:token|secret|hash|digest|signature|hmac|apiKey|api_key)\s*(?:===|!==)\s*(?:req\.|body\.|params\.|query\.|input)/gi,
+        /(?:req\.|body\.|params\.|query\.|input)[\w.]*(?:token|secret|hash|digest|signature|hmac)\s*(?:===|!==)/gi,
+      ];
+      const matches = [];
+      for (const p of patterns) {
+        matches.push(...findMatches(content, p, this, filePath, () =>
+          "Use crypto.timingSafeEqual() for comparing secrets."
+        ));
+      }
+      return matches;
+    },
+  },
+  {
+    id: "VC044", title: "Potential Log Injection", severity: "medium", category: "Injection",
+    description: "Logging unsanitized user input allows attackers to forge log entries.",
+    check(content, filePath) {
+      if (filePath.includes("test") || filePath.includes("mock")) return [];
+      if (!/(?:\/api\/|routes?\/|controllers?\/|server\.|middleware|handler)/i.test(filePath)) return [];
+      if (/sanitize|escape|JSON\.stringify|replace.*\\n/i.test(content)) return [];
+      const patterns = [
+        /console\.(?:log|warn|error|info)\s*\([^)]*(?:req\.body|req\.query|req\.params|req\.headers)\s*\)/gi,
+        /(?:logger|log)\.(?:info|warn|error|debug)\s*\([^)]*(?:req\.body|req\.query|req\.params)\s*\)/gi,
+      ];
+      const matches = [];
+      for (const p of patterns) {
+        matches.push(...findMatches(content, p, this, filePath, () =>
+          "Sanitize user input before logging. Use JSON.stringify() or a structured logger."
+        ));
+      }
+      return matches;
+    },
+  },
 ];
 
 function runScan(files) {

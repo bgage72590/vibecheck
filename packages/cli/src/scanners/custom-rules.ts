@@ -939,6 +939,439 @@ const unvalidatedEventData: CustomRule = {
 };
 
 // ────────────────────────────────────────────
+// VC030 – Insecure Deserialization
+// ────────────────────────────────────────────
+
+const insecureDeserialization: CustomRule = {
+  id: "VC030",
+  title: "Insecure Deserialization",
+  severity: "critical",
+  category: "Injection",
+  description: "Deserializing untrusted data (pickle, unserialize, yaml.load) can execute arbitrary code. Attackers craft malicious payloads to gain remote code execution.",
+  check(content, filePath) {
+    const matches: RuleMatch[] = [];
+    const patterns = [
+      // Python pickle
+      /pickle\.loads?\s*\(/g,
+      /cPickle\.loads?\s*\(/g,
+      // PHP unserialize
+      /unserialize\s*\(/g,
+      // Ruby Marshal
+      /Marshal\.load\s*\(/g,
+      // YAML unsafe load (Python)
+      /yaml\.load\s*\([^)]*(?!Loader\s*=\s*yaml\.SafeLoader)/g,
+      /yaml\.unsafe_load\s*\(/g,
+      // Java ObjectInputStream
+      /ObjectInputStream\s*\(/g,
+      // Node.js node-serialize
+      /serialize\.unserialize\s*\(/g,
+    ];
+    for (const p of patterns) {
+      matches.push(...findMatches(content, p, insecureDeserialization, filePath, () =>
+        "Never deserialize untrusted data. Use JSON instead of pickle/Marshal/unserialize. For YAML, use yaml.safe_load(). Validate and sanitize all input before deserialization."
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC031 – Hardcoded JWT Secret
+// ────────────────────────────────────────────
+
+const hardcodedJWTSecret: CustomRule = {
+  id: "VC031",
+  title: "Hardcoded JWT Secret",
+  severity: "critical",
+  category: "Secrets",
+  description: "JWT tokens signed with a hardcoded string secret can be forged by anyone who reads the source code.",
+  check(content, filePath) {
+    if (filePath.endsWith(".example") || filePath.endsWith(".template") || filePath.includes("test")) return [];
+    const patterns = [
+      /jwt\.sign\s*\([^,]+,\s*["'`][^"'`]{3,}["'`]/g,
+      /jwt\.verify\s*\([^,]+,\s*["'`][^"'`]{3,}["'`]/g,
+      /jsonwebtoken.*secret\s*[:=]\s*["'`][^"'`]{3,}["'`]/gi,
+      /JWT_SECRET\s*[:=]\s*["'`][^"'`]{3,}["'`]/g,
+    ];
+    const matches: RuleMatch[] = [];
+    for (const p of patterns) {
+      matches.push(...findMatches(content, p, hardcodedJWTSecret, filePath, () =>
+        "Move JWT secret to an environment variable: jwt.sign(payload, process.env.JWT_SECRET). Use a strong, random secret (256+ bits)."
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC032 – Missing HTTPS Enforcement
+// ────────────────────────────────────────────
+
+const missingHTTPS: CustomRule = {
+  id: "VC032",
+  title: "Missing HTTPS Enforcement",
+  severity: "high",
+  category: "Configuration",
+  description: "HTTP URLs in production code, missing HSTS headers, or insecure redirect configurations expose data to man-in-the-middle attacks.",
+  check(content, filePath) {
+    if (filePath.endsWith(".example") || filePath.includes("test") || filePath.includes("README")) return [];
+    if (filePath.match(/\.(md|txt)$/)) return [];
+    const matches: RuleMatch[] = [];
+    // Hardcoded http:// URLs to non-local hosts
+    const httpPattern = /["'`]http:\/\/(?!localhost|127\.0\.0\.1|0\.0\.0\.0|192\.168\.|10\.|172\.(?:1[6-9]|2\d|3[01])\.)[^"'`\s]+["'`]/g;
+    matches.push(...findMatches(content, httpPattern, missingHTTPS, filePath, () =>
+      "Use https:// instead of http:// for all production URLs. Add HSTS header: Strict-Transport-Security: max-age=31536000; includeSubDomains"
+    ));
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC033 – Exposed Debug/Dev Mode
+// ────────────────────────────────────────────
+
+const exposedDebugMode: CustomRule = {
+  id: "VC033",
+  title: "Debug/Development Mode Exposed",
+  severity: "high",
+  category: "Configuration",
+  description: "Debug mode, verbose logging, or development configuration left in production code exposes internal details and may enable debug endpoints.",
+  check(content, filePath) {
+    if (filePath.includes("test") || filePath.endsWith(".example") || filePath.includes("node_modules")) return [];
+    if (filePath.match(/\.env\.development$/)) return []; // Expected in dev env files
+    const matches: RuleMatch[] = [];
+    const patterns = [
+      // Debug flags set to true
+      /DEBUG\s*[:=]\s*(?:true|1|["'`]true["'`]|["'`]\*["'`])/g,
+      // Django DEBUG
+      /DEBUG\s*=\s*True/g,
+      // Flask/Express debug mode
+      /app\.debug\s*=\s*True/g,
+      /app\.run\s*\([^)]*debug\s*=\s*True/g,
+      // Source maps in production
+      /devtool\s*:\s*["'`](?:eval|cheap|source-map|inline-source-map)["'`]/g,
+    ];
+    for (const p of patterns) {
+      matches.push(...findMatches(content, p, exposedDebugMode, filePath, () =>
+        "Disable debug mode in production. Use environment variables: DEBUG = process.env.NODE_ENV !== 'production'. Remove source maps from production builds."
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC034 – Insecure Randomness
+// ────────────────────────────────────────────
+
+const insecureRandomness: CustomRule = {
+  id: "VC034",
+  title: "Insecure Randomness for Security-Sensitive Values",
+  severity: "high",
+  category: "Cryptography",
+  description: "Math.random() is not cryptographically secure. Using it for tokens, session IDs, passwords, or OTPs makes them predictable.",
+  check(content, filePath) {
+    if (filePath.includes("test") || filePath.includes("mock") || filePath.includes("seed")) return [];
+    const matches: RuleMatch[] = [];
+    // Math.random used near security-related terms
+    const securityContext = /(?:token|secret|session|password|otp|nonce|salt|key|csrf|auth|verify|code)\s*[:=].*Math\.random/gi;
+    matches.push(...findMatches(content, securityContext, insecureRandomness, filePath, () =>
+      "Use crypto.randomUUID() or crypto.getRandomValues() for security-sensitive values. Math.random() is predictable."
+    ));
+    // Math.random used to generate IDs
+    const idContext = /(?:id|uuid|guid|identifier)\s*[:=].*Math\.random/gi;
+    matches.push(...findMatches(content, idContext, insecureRandomness, filePath, () =>
+      "Use crypto.randomUUID() for generating unique IDs. Math.random() can produce collisions and is predictable."
+    ));
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC035 – Open Redirect via URL Params
+// ────────────────────────────────────────────
+
+const openRedirectParams: CustomRule = {
+  id: "VC035",
+  title: "Open Redirect via URL Parameters",
+  severity: "high",
+  category: "Injection",
+  description: "Redirect parameters like ?redirect_url=, ?return_to=, ?next= passed directly to redirects enable phishing attacks.",
+  check(content, filePath) {
+    const matches: RuleMatch[] = [];
+    const patterns = [
+      // Reading redirect-like query params and using in redirect
+      /(?:redirect_url|redirect_uri|return_to|return_url|next|callback_url|continue|goto|target|dest|destination|forward|redir)\s*(?:=|:)\s*(?:req\.query|req\.params|searchParams|query|params)\./gi,
+      /redirect\s*\(\s*(?:req\.query|req\.params|searchParams\.get)\s*\(\s*["'`](?:redirect|return|next|callback|url|goto)/gi,
+    ];
+    const hasValidation = /allowedUrls|allowedDomains|allowedHosts|validUrl|safeDomain|whitelist|startsWith.*https|new URL.*hostname/i.test(content);
+    if (hasValidation) return [];
+    for (const p of patterns) {
+      matches.push(...findMatches(content, p, openRedirectParams, filePath, () =>
+        "Validate redirect URLs against an allowlist of trusted domains. Use: const url = new URL(input); if (!ALLOWED_HOSTS.includes(url.hostname)) reject."
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC036 – Missing Error Boundary (React)
+// ────────────────────────────────────────────
+
+const missingErrorBoundary: CustomRule = {
+  id: "VC036",
+  title: "React App Missing Error Boundary",
+  severity: "medium",
+  category: "Configuration",
+  description: "React apps without error boundaries display raw stack traces and component tree info to users when crashes occur, leaking internal details.",
+  check(content, filePath) {
+    // Only check top-level layout/app files
+    if (!filePath.match(/(?:layout|_app|App|main)\.[jt]sx?$/)) return [];
+    if (!/(?:React|react|jsx|tsx)/i.test(content)) return [];
+    const hasErrorBoundary = /ErrorBoundary|componentDidCatch|getDerivedStateFromError|error-boundary/i.test(content);
+    if (hasErrorBoundary) return [];
+    // Check if it renders child components
+    if (/children|<[A-Z]|Component|Outlet/i.test(content)) {
+      return [{
+        rule: "VC036", title: missingErrorBoundary.title, severity: "medium" as const, category: "Configuration",
+        file: filePath, line: 1, snippet: getSnippet(content, 1),
+        fix: "Wrap your app in an ErrorBoundary component to catch rendering errors gracefully. Use react-error-boundary or create a class component with componentDidCatch."
+      }];
+    }
+    return [];
+  },
+};
+
+// ────────────────────────────────────────────
+// VC037 – Exposed Stack Traces in API
+// ────────────────────────────────────────────
+
+const exposedStackTraces: CustomRule = {
+  id: "VC037",
+  title: "Stack Traces Exposed in API Responses",
+  severity: "medium",
+  category: "Information Leakage",
+  description: "Returning error.stack or detailed error messages in API responses reveals internal code paths, file structure, and dependencies to attackers.",
+  check(content, filePath) {
+    const isApiFile = /(?:\/api\/|routes?\/|controllers?\/|server\.|middleware)/i.test(filePath);
+    if (!isApiFile) return [];
+    const matches: RuleMatch[] = [];
+    const patterns = [
+      // Sending stack trace in response
+      /(?:res\.(?:json|send|status)|c\.json|return.*json)\s*\([^)]*(?:err\.stack|error\.stack|e\.stack)/gi,
+      /(?:res\.(?:json|send|status)|c\.json)\s*\([^)]*(?:err\.message|error\.message|e\.message)/gi,
+      // Express-style error with stack
+      /(?:message|error)\s*:\s*(?:err|error|e)\.(?:stack|message)/gi,
+    ];
+    const hasEnvCheck = /process\.env\.NODE_ENV\s*(?:===|!==)\s*["'`]production["'`]|NODE_ENV/i.test(content);
+    if (hasEnvCheck) return []; // They're conditionally showing errors
+    for (const p of patterns) {
+      matches.push(...findMatches(content, p, exposedStackTraces, filePath, () =>
+        "Never expose error.stack or error.message to clients in production. Return generic error messages: { error: 'Something went wrong' }. Log details server-side only."
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC038 – Insecure File Upload Type
+// ────────────────────────────────────────────
+
+const insecureFileUpload: CustomRule = {
+  id: "VC038",
+  title: "Insecure File Upload Validation",
+  severity: "high",
+  category: "Injection",
+  description: "File uploads validated only by extension (not MIME type or content) allow attackers to upload executable files disguised as images or documents.",
+  check(content, filePath) {
+    if (!/upload|multer|formidable|busboy|multipart/i.test(content)) return [];
+    const matches: RuleMatch[] = [];
+    // Check for extension-only validation
+    const hasExtCheck = /\.(?:endsWith|match|test)\s*\([^)]*(?:\.jpg|\.png|\.pdf|\.doc|ext)/i.test(content);
+    const hasMimeCheck = /mimetype|content-type|file\.type|mime|magic\.detect|file-type/i.test(content);
+    if (hasExtCheck && !hasMimeCheck) {
+      matches.push(...findMatches(content, /upload|multer|formidable|busboy/gi, insecureFileUpload, filePath, () =>
+        "Validate file uploads by MIME type AND magic bytes, not just extension. Use the 'file-type' package to detect actual file type from content. Also enforce size limits."
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC039 – Missing Dependency Lock File
+// ────────────────────────────────────────────
+
+const missingLockFile: CustomRule = {
+  id: "VC039",
+  title: "Missing Dependency Lock File",
+  severity: "medium",
+  category: "Supply Chain",
+  description: "Without a lockfile (package-lock.json, pnpm-lock.yaml, yarn.lock), dependency versions are unpinned and vulnerable to supply chain attacks via version substitution.",
+  check(content, filePath) {
+    // Only check .gitignore for lock files being ignored
+    if (!filePath.endsWith(".gitignore")) return [];
+    const ignoresLock = /package-lock\.json|pnpm-lock\.yaml|yarn\.lock/i.test(content);
+    if (ignoresLock) {
+      return findMatches(content, /(?:package-lock\.json|pnpm-lock\.yaml|yarn\.lock)/gi, missingLockFile, filePath, () =>
+        "Remove the lockfile from .gitignore. Lockfiles should be committed to prevent supply chain attacks. They ensure exact versions are installed across all environments."
+      );
+    }
+    return [];
+  },
+};
+
+// ────────────────────────────────────────────
+// VC040 – Exposed .git Directory
+// ────────────────────────────────────────────
+
+const exposedGitDir: CustomRule = {
+  id: "VC040",
+  title: "Exposed .git Directory via Web Server",
+  severity: "critical",
+  category: "Information Leakage",
+  description: "Web server configs that don't block access to .git directories expose your entire source code, commit history, secrets, and credentials.",
+  check(content, filePath) {
+    // Check web server configs
+    if (!filePath.match(/(?:nginx|apache|httpd|caddy|\.htaccess|vercel\.json|netlify\.toml|server\.[jt]s)/i)) return [];
+    // For static file servers, check they block .git
+    if (/(?:static|serve|express\.static|serveStatic|public)/i.test(content)) {
+      const blocksGit = /\.git|dotfiles|hidden/i.test(content);
+      if (!blocksGit) {
+        return findMatches(content, /(?:static|serve|express\.static|serveStatic)\s*\(/g, exposedGitDir, filePath, () =>
+          "Block access to .git and other dotfiles in your static file server config. For Express: app.use('/.git', (req, res) => res.status(403).end()). For Nginx: location ~ /\\.git { deny all; }"
+        );
+      }
+    }
+    return [];
+  },
+};
+
+// ────────────────────────────────────────────
+// VC041 – Server-Side Request Forgery (SSRF)
+// ────────────────────────────────────────────
+
+const ssrfVulnerability: CustomRule = {
+  id: "VC041",
+  title: "Potential Server-Side Request Forgery (SSRF)",
+  severity: "critical",
+  category: "Injection",
+  description: "Fetching URLs from user input without validation allows attackers to access internal services, cloud metadata endpoints (169.254.169.254), and private networks.",
+  check(content, filePath) {
+    if (filePath.includes("test") || filePath.includes("mock")) return [];
+    const matches: RuleMatch[] = [];
+    // fetch/axios/http with user-controlled URLs
+    const patterns = [
+      /(?:fetch|axios\.get|axios\.post|axios|got|request|http\.get|https\.get)\s*\(\s*(?:req\.(?:body|query|params)|body|input|params|args)\./gi,
+      /(?:fetch|axios\.get|axios\.post|got|request)\s*\(\s*(?!["'`]https?:\/\/)[a-zA-Z_$][\w$]*\s*[,)]/g,
+    ];
+    const hasValidation = /allowedHosts|allowedDomains|allowedUrls|safeDomain|whitelist|urlValidator|new URL.*hostname.*includes|isAllowedUrl/i.test(content);
+    if (hasValidation) return [];
+    for (const p of patterns) {
+      matches.push(...findMatches(content, p, ssrfVulnerability, filePath, () =>
+        "Validate URLs against an allowlist before fetching. Block internal IPs: 127.0.0.1, 10.x, 172.16-31.x, 192.168.x, 169.254.169.254 (cloud metadata). Use: const url = new URL(input); if (!ALLOWED_HOSTS.includes(url.hostname)) throw new Error('Blocked');"
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC042 – Mass Assignment
+// ────────────────────────────────────────────
+
+const massAssignment: CustomRule = {
+  id: "VC042",
+  title: "Mass Assignment Vulnerability",
+  severity: "high",
+  category: "Authorization",
+  description: "Spreading or assigning request body directly into database models allows attackers to set fields they shouldn't (e.g., isAdmin, role, verified).",
+  check(content, filePath) {
+    const isApiFile = /(?:\/api\/|routes?\/|controllers?\/|server\.|handler)/i.test(filePath);
+    if (!isApiFile) return [];
+    const matches: RuleMatch[] = [];
+    const patterns = [
+      // Object.assign(model, req.body)
+      /Object\.assign\s*\(\s*(?:user|account|profile|record|doc|model|entity)[^,]*,\s*(?:req\.body|body|input|data)\s*\)/gi,
+      // Spread req.body into create/update
+      /(?:create|update|insert|save|findOneAndUpdate|updateOne|upsert)\s*\(\s*\{[^}]*\.\.\.(?:req\.body|body|input|data)/gi,
+      // Direct req.body into DB
+      /(?:create|insert|save)\s*\(\s*(?:req\.body|body)\s*\)/gi,
+    ];
+    const hasSanitization = /pick\(|omit\(|allowedFields|sanitize|whitelist|permit|strong_params/i.test(content);
+    if (hasSanitization) return [];
+    for (const p of patterns) {
+      matches.push(...findMatches(content, p, massAssignment, filePath, () =>
+        "Never pass req.body directly to database operations. Explicitly pick allowed fields: const { name, email } = req.body; await db.create({ name, email });"
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC043 – Timing Attack on Comparison
+// ────────────────────────────────────────────
+
+const timingAttack: CustomRule = {
+  id: "VC043",
+  title: "Timing-Unsafe Secret Comparison",
+  severity: "medium",
+  category: "Cryptography",
+  description: "Using === to compare secrets, tokens, or hashes leaks information via timing side-channels. Attackers can determine the correct value one character at a time.",
+  check(content, filePath) {
+    if (filePath.includes("test") || filePath.includes("mock")) return [];
+    const matches: RuleMatch[] = [];
+    // Direct comparison of secrets/tokens/hashes
+    const patterns = [
+      /(?:token|secret|hash|digest|signature|hmac|apiKey|api_key)\s*(?:===|!==)\s*(?:req\.|body\.|params\.|query\.|input)/gi,
+      /(?:req\.|body\.|params\.|query\.|input)[\w.]*(?:token|secret|hash|digest|signature|hmac)\s*(?:===|!==)/gi,
+    ];
+    const hasTimingSafe = /timingSafeEqual|constantTimeEqual|safeCompare|secureCompare/i.test(content);
+    if (hasTimingSafe) return [];
+    for (const p of patterns) {
+      matches.push(...findMatches(content, p, timingAttack, filePath, () =>
+        "Use crypto.timingSafeEqual() for comparing secrets: crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b)). This prevents timing-based side-channel attacks."
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC044 – Log Injection
+// ────────────────────────────────────────────
+
+const logInjection: CustomRule = {
+  id: "VC044",
+  title: "Potential Log Injection",
+  severity: "medium",
+  category: "Injection",
+  description: "Logging unsanitized user input allows attackers to forge log entries, inject malicious content, or exploit log aggregation systems via newlines and special characters.",
+  check(content, filePath) {
+    if (filePath.includes("test") || filePath.includes("mock")) return [];
+    const isServerFile = /(?:\/api\/|routes?\/|controllers?\/|server\.|middleware|handler)/i.test(filePath);
+    if (!isServerFile) return [];
+    const matches: RuleMatch[] = [];
+    // console.log/warn/error with req.body/query/params directly
+    const patterns = [
+      /console\.(?:log|warn|error|info)\s*\([^)]*(?:req\.body|req\.query|req\.params|req\.headers)\s*\)/gi,
+      /(?:logger|log)\.(?:info|warn|error|debug)\s*\([^)]*(?:req\.body|req\.query|req\.params)\s*\)/gi,
+    ];
+    const hasSanitization = /sanitize|escape|JSON\.stringify|replace.*\\n/i.test(content);
+    if (hasSanitization) return [];
+    for (const p of patterns) {
+      matches.push(...findMatches(content, p, logInjection, filePath, () =>
+        "Sanitize user input before logging: strip newlines and control characters. Use JSON.stringify() or a structured logger (e.g., pino, winston) that escapes values automatically."
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
 // EXPORT ALL RULES
 // ────────────────────────────────────────────
 
@@ -972,6 +1405,21 @@ export const allRules: CustomRule[] = [
   missingSecurityMeta,
   unvalidatedAPIParams,
   unvalidatedEventData,
+  insecureDeserialization,
+  hardcodedJWTSecret,
+  missingHTTPS,
+  exposedDebugMode,
+  insecureRandomness,
+  openRedirectParams,
+  missingErrorBoundary,
+  exposedStackTraces,
+  insecureFileUpload,
+  missingLockFile,
+  exposedGitDir,
+  ssrfVulnerability,
+  massAssignment,
+  timingAttack,
+  logInjection,
 ];
 
 export function runCustomRules(
