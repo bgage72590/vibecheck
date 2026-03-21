@@ -479,7 +479,7 @@ export default function ScanPage() {
             </div>
             <div>
               <div className="text-cyan-400 font-medium mb-1">2. Scan</div>
-              <p>Our engine runs 10+ security rules checking for hardcoded secrets, SQL injection, XSS, missing auth, and more.</p>
+              <p>Our engine runs 29 security rules checking for hardcoded secrets, SQL injection, XSS, Electron misconfigs, missing auth, and more.</p>
             </div>
             <div>
               <div className="text-cyan-400 font-medium mb-1">3. Fix</div>

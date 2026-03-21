@@ -348,30 +348,212 @@ const rules = [
     id: "VC018", title: "Exposed Clerk/Auth Secret Key", severity: "critical", category: "Secrets",
     description: "Auth provider secret keys (Clerk, Auth0, NextAuth) must never be in client-side code or NEXT_PUBLIC_ variables.",
     check(content, filePath) {
-      // Only check client-side files
       const isClientFile = filePath.match(/\.(jsx|tsx|vue|svelte)$/) || /["']use client["']/.test(content);
       const isEnvFile = filePath.match(/\.env/);
       if (!isClientFile && !isEnvFile) return [];
       const patterns = [];
       if (isClientFile) {
-        patterns.push(
-          /CLERK_SECRET_KEY/g,
-          /AUTH0_CLIENT_SECRET/g,
-          /NEXTAUTH_SECRET/g,
-          /sk_(?:live|test)_[a-zA-Z0-9]{20,}/g,
-        );
+        patterns.push(/CLERK_SECRET_KEY/g, /AUTH0_CLIENT_SECRET/g, /NEXTAUTH_SECRET/g, /sk_(?:live|test)_[a-zA-Z0-9]{20,}/g);
       }
       if (isEnvFile) {
-        patterns.push(
-          /NEXT_PUBLIC_CLERK_SECRET/gi,
-          /NEXT_PUBLIC_AUTH0_SECRET/gi,
-          /NEXT_PUBLIC_NEXTAUTH_SECRET/gi,
-        );
+        patterns.push(/NEXT_PUBLIC_CLERK_SECRET/gi, /NEXT_PUBLIC_AUTH0_SECRET/gi, /NEXT_PUBLIC_NEXTAUTH_SECRET/gi);
       }
       const matches = [];
       for (const p of patterns) {
         matches.push(...findMatches(content, p, this, filePath, () =>
           "Move this secret to a server-side environment variable (without the NEXT_PUBLIC_ prefix). Never expose auth secrets to the browser."
+        ));
+      }
+      return matches;
+    },
+  },
+  {
+    id: "VC019", title: "Insecure Electron BrowserWindow Configuration", severity: "high", category: "Configuration",
+    description: "Electron BrowserWindow with nodeIntegration enabled, contextIsolation disabled, or sandbox disabled allows renderer processes to access Node.js APIs, enabling remote code execution.",
+    check(content, filePath) {
+      if (!/BrowserWindow/i.test(content)) return [];
+      const matches = [];
+      const patterns = [/nodeIntegration\s*:\s*true/g, /contextIsolation\s*:\s*false/g, /sandbox\s*:\s*false/g, /webSecurity\s*:\s*false/g, /allowRunningInsecureContent\s*:\s*true/g];
+      for (const p of patterns) {
+        matches.push(...findMatches(content, p, this, filePath, (m) =>
+          `Fix: set ${m[0].split(":")[0].trim()} to the secure value. Enable contextIsolation, sandbox, webSecurity; disable nodeIntegration.`
+        ));
+      }
+      if (/new\s+BrowserWindow\s*\(/g.test(content) && !/sandbox\s*:/i.test(content)) {
+        matches.push(...findMatches(content, /new\s+BrowserWindow\s*\(/g, { ...this, title: "Electron BrowserWindow Missing sandbox:true" }, filePath, () =>
+          "Add sandbox: true to BrowserWindow webPreferences."
+        ));
+      }
+      return matches;
+    },
+  },
+  {
+    id: "VC020", title: "Missing Content Security Policy (CSP)", severity: "high", category: "Configuration",
+    description: "Without a Content-Security-Policy header or meta tag, your app is vulnerable to XSS and data injection attacks.",
+    check(content, filePath) {
+      if (filePath.match(/\.(html|htm)$/)) {
+        if (!/Content-Security-Policy/i.test(content)) {
+          return [{ rule: "VC020", title: this.title, severity: "high", category: "Configuration", file: filePath, line: 1, snippet: getSnippet(content, 1),
+            fix: 'Add a CSP meta tag: <meta http-equiv="Content-Security-Policy" content="default-src \'self\'; script-src \'self\'">' }];
+        }
+      }
+      if (/BrowserWindow|electron/i.test(content) && /main|index/i.test(filePath)) {
+        if (!/Content-Security-Policy/i.test(content) && !/helmet/i.test(content) && /(?:loadFile|loadURL)/i.test(content)) {
+          return findMatches(content, /(?:loadFile|loadURL)\s*\(/g, this, filePath, () =>
+            "Set CSP headers in Electron main process using session.defaultSession.webRequest.onHeadersReceived."
+          );
+        }
+      }
+      return [];
+    },
+  },
+  {
+    id: "VC021", title: "IPC/File Handler Without Path Validation", severity: "medium", category: "Injection",
+    description: "IPC handlers that read/write files without path validation allow path traversal, exposing sensitive files.",
+    check(content, filePath) {
+      if (!/ipcMain\.handle|ipcMain\.on/i.test(content)) return [];
+      if (!/readFile|writeFile|readFileSync|writeFileSync|createReadStream|createWriteStream/i.test(content)) return [];
+      if (/path\.resolve|path\.normalize|startsWith|\.includes\s*\(\s*["'`]\.\.["'`]\)|allowedPaths|safePath|validatePath|sanitizePath/i.test(content)) return [];
+      return findMatches(content, /ipcMain\.(?:handle|on)\s*\(\s*["'`][^"'`]*(?:read|write|file|save|load|open|export)[^"'`]*["'`]/gi, this, filePath, () =>
+        "Validate file paths in IPC handlers: ensure paths are within allowed directories, reject '..' sequences, block sensitive dirs (.ssh, .env)."
+      );
+    },
+  },
+  {
+    id: "VC022", title: "HTML Export/Render Without Sanitization", severity: "critical", category: "Injection",
+    description: "Generating HTML from user content without sanitization allows stored XSS attacks.",
+    check(content, filePath) {
+      if (/DOMPurify|sanitize|escapeHtml|escape|xss|encode|htmlEncode/i.test(content)) return [];
+      const patterns = [
+        /`<[^`]*\$\{[^}]*(?:content|title|body|text|name|message|description|input|value|data)[^}]*\}[^`]*>`/gi,
+        /["']<[^"']*['"]\s*\+\s*(?:content|title|body|text|message|data|doc\.|post\.|article\.)/gi,
+      ];
+      const matches = [];
+      for (const p of patterns) {
+        matches.push(...findMatches(content, p, this, filePath, () =>
+          "Sanitize user content before embedding in HTML. Use DOMPurify.sanitize(content) or escape HTML entities."
+        ));
+      }
+      return matches;
+    },
+  },
+  {
+    id: "VC023", title: "Prototype Pollution Risk", severity: "high", category: "Injection",
+    description: "Parsing JSON from localStorage/external sources and merging without validation enables prototype pollution.",
+    check(content, filePath) {
+      if (/schema|validate|sanitize|whitelist|allowedKeys|Object\.freeze|zod|yup|joi|ajv/i.test(content)) return [];
+      const matches = [];
+      if (/Object\.assign\s*\([^)]*JSON\.parse|\.\.\.JSON\.parse/i.test(content)) {
+        matches.push(...findMatches(content, /Object\.assign\s*\([^)]*JSON\.parse|\.\.\.JSON\.parse/g, this, filePath, () =>
+          "Validate parsed data against an expected schema. Check for __proto__ and constructor keys."
+        ));
+      }
+      const storagePatterns = [/JSON\.parse\s*\(\s*(?:localStorage|sessionStorage)\.getItem/g];
+      for (const p of storagePatterns) {
+        matches.push(...findMatches(content, p, this, filePath, () =>
+          "Validate localStorage data against an expected schema before using it."
+        ));
+      }
+      return matches;
+    },
+  },
+  {
+    id: "VC024", title: "File Write/Save Without Size Limit", severity: "medium", category: "Availability",
+    description: "File save/upload handlers without size validation can lead to denial-of-service.",
+    check(content, filePath) {
+      if (!/writeFile|writeFileSync/i.test(content)) return [];
+      if (/size|length|byteLength|maxSize|MAX_SIZE|sizeLimit|content-length/i.test(content)) return [];
+      return findMatches(content, /(?:writeFile|writeFileSync)\s*\(/g, this, filePath, () =>
+        "Add file size validation before writing. Check content.length against a maximum (e.g., 10MB)."
+      );
+    },
+  },
+  {
+    id: "VC025", title: "Unsanitized Filename in File Operations", severity: "medium", category: "Injection",
+    description: "User-supplied filenames without sanitization can enable path traversal or command injection.",
+    check(content, filePath) {
+      if (/sanitize|cleanFilename|safeFilename|replace\s*\(\s*\/\[.*\]\//i.test(content)) return [];
+      const patterns = [
+        /(?:writeFile|writeFileSync|createWriteStream|rename|copyFile)\s*\(\s*(?:`[^`]*\$\{|[^"'`\s,]+\s*\+)/g,
+        /\.download\s*=\s*(?!["'`])/g,
+      ];
+      const matches = [];
+      for (const p of patterns) {
+        matches.push(...findMatches(content, p, this, filePath, () =>
+          "Sanitize filenames: strip path separators, special chars, and '..' sequences. Example: name.replace(/[^a-zA-Z0-9._-]/g, '_')"
+        ));
+      }
+      return matches;
+    },
+  },
+  {
+    id: "VC026", title: "Electron: External Navigation Not Blocked", severity: "medium", category: "Configuration",
+    description: "Electron apps that don't block external URL navigation are vulnerable to phishing.",
+    check(content, filePath) {
+      if (!/BrowserWindow|electron/i.test(content) || !/main|index/i.test(filePath)) return [];
+      if (/will-navigate|new-window|setWindowOpenHandler/i.test(content)) return [];
+      if (/new\s+BrowserWindow/i.test(content)) {
+        return findMatches(content, /new\s+BrowserWindow\s*\(/g, this, filePath, () =>
+          "Block external navigation: win.webContents.on('will-navigate', (e, url) => { if (!url.startsWith('file://')) e.preventDefault(); });"
+        );
+      }
+      return [];
+    },
+  },
+  {
+    id: "VC027", title: "Missing Security Meta Tags / Headers", severity: "medium", category: "Configuration",
+    description: "HTML pages without X-Content-Type-Options or referrer policy are susceptible to MIME-sniffing and info leakage.",
+    check(content, filePath) {
+      if (!filePath.match(/\.(html|htm)$/)) return [];
+      const matches = [];
+      if (!/X-Content-Type-Options/i.test(content) && !/<meta[^>]*nosniff/i.test(content)) {
+        matches.push({ rule: "VC027", title: "Missing X-Content-Type-Options", severity: "medium", category: "Configuration", file: filePath, line: 1, snippet: getSnippet(content, 1),
+          fix: 'Add <meta http-equiv="X-Content-Type-Options" content="nosniff">' });
+      }
+      if (!/referrer/i.test(content)) {
+        matches.push({ rule: "VC027", title: "Missing Referrer Policy", severity: "medium", category: "Configuration", file: filePath, line: 1, snippet: getSnippet(content, 1),
+          fix: 'Add <meta name="referrer" content="no-referrer">' });
+      }
+      return matches;
+    },
+  },
+  {
+    id: "VC028", title: "Unvalidated API Request Parameters", severity: "high", category: "Injection",
+    description: "API requests with unvalidated user input (API keys, model names) can be exploited for injection or unauthorized access.",
+    check(content, filePath) {
+      if (/validate|sanitize|regex|test\(|match\(|allowList|whitelist|enum|includes\(/i.test(content)) return [];
+      const matches = [];
+      if (/model\s*[:=]\s*(?:req\.body|params|input|body)\./i.test(content) && /(?:openai|anthropic|claude|gpt|llm)/i.test(content)) {
+        if (!/allowedModels|validModels|models\s*\.\s*includes|model.*===|model.*includes/i.test(content)) {
+          matches.push(...findMatches(content, /model\s*[:=]\s*(?:req\.body|params|input|body)\./gi, this, filePath, () =>
+            "Validate model selection against an allowlist of approved models."
+          ));
+        }
+      }
+      const apiKeyPatterns = [/(?:apiKey|api_key|authorization)\s*[:=]\s*(?:req\.body|req\.query|params|input|formData|body)\./gi];
+      for (const p of apiKeyPatterns) {
+        matches.push(...findMatches(content, p, this, filePath, () =>
+          "Validate API key format before use (check prefix and length)."
+        ));
+      }
+      return matches;
+    },
+  },
+  {
+    id: "VC029", title: "Unvalidated Event or PostMessage Data", severity: "medium", category: "Injection",
+    description: "Message event handlers without origin checking or custom events without type-checking are vulnerable to injection.",
+    check(content, filePath) {
+      const matches = [];
+      if (/addEventListener\s*\(\s*["'`]message["'`]/i.test(content)) {
+        if (!/event\.origin|e\.origin|message\.origin/i.test(content)) {
+          matches.push(...findMatches(content, /addEventListener\s*\(\s*["'`]message["'`]/g, this, filePath, () =>
+            "Verify event.origin in message handlers. Example: if (event.origin !== 'https://trusted.com') return;"
+          ));
+        }
+      }
+      if (/new\s+CustomEvent\s*\(/i.test(content) && !/typeof\s|instanceof|z\.|schema|validate/i.test(content)) {
+        matches.push(...findMatches(content, /new\s+CustomEvent\s*\(/g, this, filePath, () =>
+          "Type-check custom event data before using it."
         ));
       }
       return matches;

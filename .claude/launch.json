@@ -2,9 +2,10 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "vibecheck-preview",
-      "runtimeExecutable": "/tmp/node-v22.14.0-darwin-arm64/bin/node",
-      "runtimeArgs": ["packages/cli/test-server.mjs"],
+      "name": "web-dev",
+      "runtimeExecutable": "/tmp/node-v22.14.0-darwin-arm64/bin/npx",
+      "runtimeArgs": ["--yes", "next", "dev", "-p", "3847"],
+      "cwd": "packages/web",
       "port": 3847
     }
   ]
