@@ -1095,7 +1095,252 @@ const rules = [
       return matches;
     },
   },
+  {
+    id: "VC063", title: "Unsanitized dangerouslySetInnerHTML", severity: "critical", category: "Injection",
+    description: "Using dangerouslySetInnerHTML without DOMPurify enables XSS attacks.",
+    check(content, filePath) {
+      if (!filePath.match(/\.(jsx|tsx)$/)) return [];
+      if (!/dangerouslySetInnerHTML/i.test(content)) return [];
+      if (/DOMPurify|sanitize|purify|xss|sanitizeHtml/i.test(content)) return [];
+      return findMatches(content, /dangerouslySetInnerHTML\s*=\s*\{\s*\{/g, this, filePath, () =>
+        "Sanitize: dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(content) }}."
+      );
+    },
+  },
+  {
+    id: "VC064", title: "Next.js Server Action Without Auth", severity: "high", category: "Authorization",
+    description: "Server Actions ('use server') are public endpoints. Without auth checks, anyone can call them.",
+    check(content, filePath) {
+      if (!filePath.match(/\.(jsx?|tsx?)$/)) return [];
+      if (!/["']use server["']/i.test(content)) return [];
+      if (/getServerSession|auth\(\)|currentUser|getUser|requireAuth|clerk|getAuth/i.test(content)) return [];
+      if (/export\s+async\s+function/i.test(content)) {
+        return findMatches(content, /export\s+async\s+function\s+\w+/g, this, filePath, () =>
+          "Add auth to Server Actions: const session = await getServerSession(); if (!session) throw new Error('Unauthorized');"
+        );
+      }
+      return [];
+    },
+  },
+  {
+    id: "VC065", title: "Unprotected Next.js API Route", severity: "high", category: "Authorization",
+    description: "Next.js API routes without authentication can be called by anyone.",
+    check(content, filePath) {
+      if (!filePath.match(/\/api\/.*\.(jsx?|tsx?)$/) && !filePath.match(/\/app\/api\/.*route\.(jsx?|tsx?)$/)) return [];
+      if (/health|status|public|webhook/i.test(filePath)) return [];
+      if (/getServerSession|auth\(\)|currentUser|requireAuth|clerk|getAuth|verifyToken|middleware/i.test(content)) return [];
+      if (/export\s+(?:async\s+)?function\s+(?:GET|POST|PUT|DELETE|PATCH)/i.test(content)) {
+        return findMatches(content, /export\s+(?:async\s+)?function\s+(?:GET|POST|PUT|DELETE|PATCH)/g, this, filePath, () =>
+          "Add auth to API routes: const session = await getServerSession(authOptions); if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });"
+        );
+      }
+      return [];
+    },
+  },
+  {
+    id: "VC066", title: "Secret Used in Client Component", severity: "critical", category: "Secrets",
+    description: "process.env without NEXT_PUBLIC_ in 'use client' components exposes server secrets in browser bundles.",
+    check(content, filePath) {
+      if (!filePath.match(/\.(jsx?|tsx?)$/)) return [];
+      if (!/["']use client["']/i.test(content)) return [];
+      if (/process\.env\.(?!NEXT_PUBLIC_)[A-Z_]{3,}/g.test(content)) {
+        return findMatches(content, /process\.env\.(?!NEXT_PUBLIC_)[A-Z_]{3,}/g, this, filePath, () =>
+          "Server env vars aren't available in client components. Move this logic to a Server Component or API route."
+        );
+      }
+      return [];
+    },
+  },
+  {
+    id: "VC067", title: "Insecure Deep Link Handling", severity: "high", category: "Injection",
+    description: "Deep links without URL validation can be exploited for phishing or unauthorized actions.",
+    check(content, filePath) {
+      if (!/(?:Linking|DeepLinking|deep.?link|handleURL|openURL)/i.test(content)) return [];
+      if (/allowedSchemes|allowedHosts|validateURL|isAllowedURL|whitelist/i.test(content)) return [];
+      const patterns = [/Linking\.addEventListener\s*\([^)]*(?:url|link)/gi, /Linking\.getInitialURL\s*\(\)/g, /handleOpenURL|handleDeepLink/gi];
+      const matches = [];
+      for (const p of patterns) { matches.push(...findMatches(content, p, this, filePath, () => "Validate deep link URLs against an allowlist before navigating.")); }
+      return matches;
+    },
+  },
+  {
+    id: "VC068", title: "Sensitive Data in AsyncStorage", severity: "high", category: "Secrets",
+    description: "AsyncStorage is unencrypted. Tokens/passwords stored there are readable by other apps.",
+    check(content, filePath) {
+      if (!/AsyncStorage/i.test(content)) return [];
+      return findMatches(content, /AsyncStorage\.setItem\s*\(\s*["'`](?:token|access_token|auth_token|jwt|session|refresh_token|api_key|password|secret)/gi, this, filePath, () =>
+        "Use react-native-keychain or expo-secure-store instead of AsyncStorage for sensitive data."
+      );
+    },
+  },
+  {
+    id: "VC069", title: "Missing Certificate Pinning", severity: "medium", category: "Cryptography",
+    description: "Mobile apps without SSL certificate pinning are vulnerable to MITM via rogue CAs.",
+    check(content, filePath) {
+      if (!/(?:react.native|expo|mobile)/i.test(filePath) && !/React.*Native|expo/i.test(content)) return [];
+      if (!/axios\.create|new\s+(?:HttpClient|ApiClient)/i.test(content)) return [];
+      if (/pinning|certificate|cert|ssl|TrustKit|react-native-ssl-pinning/i.test(content)) return [];
+      return findMatches(content, /axios\.create|new\s+(?:HttpClient|ApiClient)/gi, this, filePath, () =>
+        "Add SSL certificate pinning: use react-native-ssl-pinning or TrustKit."
+      );
+    },
+  },
+  {
+    id: "VC070", title: "Android App Debuggable", severity: "high", category: "Configuration",
+    description: "android:debuggable='true' allows debugger attachment and memory inspection.",
+    check(content, filePath) {
+      if (!filePath.match(/AndroidManifest\.xml$/i)) return [];
+      return findMatches(content, /android:debuggable\s*=\s*["']true["']/gi, this, filePath, () =>
+        "Remove android:debuggable='true'. Use build variants for debug builds."
+      );
+    },
+  },
+  {
+    id: "VC071", title: "Django DEBUG Mode Enabled", severity: "critical", category: "Configuration",
+    description: "DEBUG=True exposes source code, queries, and env vars in error pages.",
+    check(content, filePath) {
+      if (!filePath.match(/settings\.py$/i)) return [];
+      if (/os\.environ|env\(|config\(|getenv/i.test(content)) return [];
+      return findMatches(content, /^\s*DEBUG\s*=\s*True/gm, this, filePath, () =>
+        "Use env var: DEBUG = os.environ.get('DEBUG', 'False') == 'True'."
+      );
+    },
+  },
+  {
+    id: "VC072", title: "Flask Secret Key Hardcoded", severity: "critical", category: "Secrets",
+    description: "Hardcoded secret_key allows forging sessions and CSRF tokens.",
+    check(content, filePath) {
+      if (!filePath.match(/\.py$/)) return [];
+      if (/os\.environ|env\(|getenv/i.test(content)) return [];
+      const patterns = [/(?:app\.)?secret_key\s*=\s*["'`][^"'`]{3,}["'`]/g, /(?:app\.config)\s*\[\s*["']SECRET_KEY["']\s*\]\s*=\s*["'`][^"'`]{3,}["'`]/g];
+      const matches = [];
+      for (const p of patterns) { matches.push(...findMatches(content, p, this, filePath, () => "Use env var: app.secret_key = os.environ['SECRET_KEY'].")); }
+      return matches;
+    },
+  },
+  {
+    id: "VC073", title: "Unsafe Pickle Deserialization", severity: "critical", category: "Injection",
+    description: "pickle.loads() on untrusted data allows arbitrary code execution.",
+    check(content, filePath) {
+      if (!filePath.match(/\.py$/)) return [];
+      if (/restricted_loads|SafeUnpickler|safe_load|yaml\.safe_load/i.test(content)) return [];
+      const patterns = [/pickle\.loads?\s*\(/g, /cPickle\.loads?\s*\(/g, /yaml\.load\s*\([^)]*(?!Loader\s*=\s*yaml\.SafeLoader)/g];
+      const matches = [];
+      for (const p of patterns) { matches.push(...findMatches(content, p, this, filePath, () => "Never unpickle untrusted data. Use JSON or yaml.safe_load().")); }
+      return matches;
+    },
+  },
+  {
+    id: "VC074", title: "CSRF Protection Disabled", severity: "high", category: "Authorization",
+    description: "@csrf_exempt allows forged cross-site requests.",
+    check(content, filePath) {
+      if (!filePath.match(/\.py$/)) return [];
+      return findMatches(content, /@csrf_exempt/g, this, filePath, () =>
+        "Remove @csrf_exempt. Use CSRF tokens or token-based auth (JWT) for APIs."
+      );
+    },
+  },
+  {
+    id: "VC075", title: "GitHub Actions Script Injection", severity: "critical", category: "Injection",
+    description: "${{ github.event.* }} in run: steps allows shell command injection via PR titles/issue bodies.",
+    check(content, filePath) {
+      if (!filePath.match(/\.github\/workflows\/.*\.(yml|yaml)$/i)) return [];
+      const patterns = [
+        /run:.*\$\{\{\s*github\.event\.(?:issue|pull_request|comment|review|head_commit)\.(?:title|body|message)/gi,
+        /run:.*\$\{\{\s*github\.event\.(?:inputs|head_ref|base_ref)/gi,
+      ];
+      const matches = [];
+      for (const p of patterns) { matches.push(...findMatches(content, p, this, filePath, () => "Pass as env var: env: TITLE: ${{ github.event.issue.title }}, then use $TITLE.")); }
+      return matches;
+    },
+  },
+  {
+    id: "VC076", title: "Hardcoded Secrets in CI Config", severity: "critical", category: "Secrets",
+    description: "Tokens/keys in workflow files are visible to anyone with repo access.",
+    check(content, filePath) {
+      if (!filePath.match(/\.github\/workflows\/|\.gitlab-ci|Jenkinsfile|\.circleci|bitbucket-pipelines/i)) return [];
+      const patterns = [
+        /(?:password|token|key|secret|api_key|apikey)\s*[:=]\s*["'`][A-Za-z0-9+/=_-]{20,}["'`]/gi,
+        /(?:DOCKER_PASSWORD|NPM_TOKEN|AWS_SECRET_ACCESS_KEY|GH_TOKEN)\s*[:=]\s*["'`][^"'`$]+["'`]/gi,
+      ];
+      const matches = [];
+      for (const p of patterns) { matches.push(...findMatches(content, p, this, filePath, () => "Use repository secrets: ${{ secrets.MY_TOKEN }}.")); }
+      return matches;
+    },
+  },
+  {
+    id: "VC077", title: "CORS Wildcard in Serverless Config", severity: "high", category: "Configuration",
+    description: "Access-Control-Allow-Origin: * in serverless configs allows any site to call your API.",
+    check(content, filePath) {
+      if (!filePath.match(/serverless\.(yml|yaml)|vercel\.json|netlify\.toml|amplify\.yml/i)) return [];
+      return findMatches(content, /(?:Access-Control-Allow-Origin|allowOrigin|cors).*['"]\*['"]/gi, this, filePath, () =>
+        "Replace wildcard with specific origins: allowOrigin: ['https://yourdomain.com']."
+      );
+    },
+  },
+  {
+    id: "VC078", title: "Kubernetes Privileged Container", severity: "critical", category: "Configuration",
+    description: "privileged: true in k8s gives full host access, making container escapes trivial.",
+    check(content, filePath) {
+      if (!filePath.match(/\.(yaml|yml)$/) || !/(?:kind|apiVersion|container)/i.test(content)) return [];
+      const patterns = [/privileged\s*:\s*true/g, /runAsUser\s*:\s*0\b/g, /runAsNonRoot\s*:\s*false/g, /allowPrivilegeEscalation\s*:\s*true/g];
+      const matches = [];
+      for (const p of patterns) { matches.push(...findMatches(content, p, this, filePath, () => "Set: privileged: false, runAsNonRoot: true, allowPrivilegeEscalation: false.")); }
+      return matches;
+    },
+  },
 ];
+
+// ────────────────────────────────────────────
+// FRAMEWORK DETECTION
+// ────────────────────────────────────────────
+
+function detectFramework(files) {
+  const frameworks = new Set();
+  for (const { path, content } of files) {
+    if (path.match(/next\.config/i) || /from\s+["']next/i.test(content)) frameworks.add("next.js");
+    if (/from\s+["']react-native/i.test(content) || path.match(/react-native\.config/i)) frameworks.add("react-native");
+    else if (/from\s+["']react/i.test(content) || /import\s+React/i.test(content)) frameworks.add("react");
+    if (/from\s+["']express/i.test(content) || /require\s*\(\s*["']express/i.test(content)) frameworks.add("express");
+    if (/from\s+["']hono/i.test(content)) frameworks.add("hono");
+    if (/from\s+["']fastify/i.test(content)) frameworks.add("fastify");
+    if (/from\s+["']electron/i.test(content) || path.match(/electron/i)) frameworks.add("electron");
+    if (path.match(/settings\.py$/) || /from\s+django/i.test(content)) frameworks.add("django");
+    if (/from\s+flask/i.test(content) || /Flask\s*\(/i.test(content)) frameworks.add("flask");
+    if (/from\s+["']vue/i.test(content) || path.match(/vue\.config/i)) frameworks.add("vue");
+    if (/from\s+["']svelte/i.test(content) || path.match(/svelte\.config/i)) frameworks.add("svelte");
+  }
+  return [...frameworks];
+}
+
+// ────────────────────────────────────────────
+// SEVERITY GRADING
+// ────────────────────────────────────────────
+
+function calculateGrade(findings, totalFiles) {
+  if (findings.length === 0) {
+    return { grade: "A+", score: 100, summary: "No security issues detected. Excellent!" };
+  }
+  let deductions = 0;
+  for (const f of findings) {
+    switch (f.severity) {
+      case "critical": deductions += 15; break;
+      case "high": deductions += 8; break;
+      case "medium": deductions += 4; break;
+      case "low": deductions += 1; break;
+    }
+  }
+  const sizeBuffer = Math.min(Math.log2(Math.max(totalFiles, 1)) * 2, 15);
+  const score = Math.max(0, Math.min(100, 100 - deductions + sizeBuffer));
+  let grade, summary;
+  if (score >= 95) { grade = "A+"; summary = "Excellent security posture."; }
+  else if (score >= 85) { grade = "A"; summary = "Strong security with minor concerns."; }
+  else if (score >= 70) { grade = "B"; summary = "Good security but some issues need attention."; }
+  else if (score >= 55) { grade = "C"; summary = "Fair — several vulnerabilities should be fixed."; }
+  else if (score >= 35) { grade = "D"; summary = "Poor — critical issues require immediate attention."; }
+  else { grade = "F"; summary = "Failing — serious vulnerabilities present."; }
+  return { grade, score: Math.round(score), summary };
+}
 
 function runScan(files) {
   const findings = [];
@@ -1272,11 +1517,18 @@ app.post("/scans/upload", async (c) => {
     // Run the scanner
     const findings = runScan(filesToScan);
     const duration = Date.now() - startTime;
+    const gradeResult = calculateGrade(findings, filesToScan.length);
+    const frameworks = detectFramework(filesToScan);
 
     return c.json({
       findings,
       filesScanned: filesToScan.length,
       duration,
+      grade: gradeResult.grade,
+      score: gradeResult.score,
+      gradeSummary: gradeResult.summary,
+      frameworks,
+      totalRules: rules.length,
       criticalCount: findings.filter(f => f.severity === "critical").length,
       highCount: findings.filter(f => f.severity === "high").length,
       mediumCount: findings.filter(f => f.severity === "medium").length,
@@ -1339,11 +1591,18 @@ app.post("/scans/upload-json", async (c) => {
 
     const findings = runScan(filesToScan);
     const duration = Date.now() - startTime;
+    const gradeResult = calculateGrade(findings, filesToScan.length);
+    const frameworks = detectFramework(filesToScan);
 
     return c.json({
       findings,
       filesScanned: filesToScan.length,
       duration,
+      grade: gradeResult.grade,
+      score: gradeResult.score,
+      gradeSummary: gradeResult.summary,
+      frameworks,
+      totalRules: rules.length,
       criticalCount: findings.filter(f => f.severity === "critical").length,
       highCount: findings.filter(f => f.severity === "high").length,
       mediumCount: findings.filter(f => f.severity === "medium").length,

@@ -1884,6 +1884,489 @@ const hardcodedEncryptionKey: CustomRule = {
 };
 
 // ────────────────────────────────────────────
+// VC063 – dangerouslySetInnerHTML
+// ────────────────────────────────────────────
+
+const dangerousInnerHTML: CustomRule = {
+  id: "VC063",
+  title: "Unsanitized dangerouslySetInnerHTML",
+  severity: "critical",
+  category: "Injection",
+  description: "Using dangerouslySetInnerHTML without sanitization (DOMPurify) enables XSS attacks. User-controlled content injected as raw HTML can execute arbitrary JavaScript.",
+  check(content, filePath) {
+    if (!filePath.match(/\.(jsx|tsx)$/)) return [];
+    if (!/dangerouslySetInnerHTML/i.test(content)) return [];
+    const hasSanitize = /DOMPurify|sanitize|purify|xss|sanitizeHtml|isomorphic-dompurify/i.test(content);
+    if (hasSanitize) return [];
+    return findMatches(content, /dangerouslySetInnerHTML\s*=\s*\{\s*\{/g, dangerousInnerHTML, filePath, () =>
+      "Sanitize HTML before using dangerouslySetInnerHTML: dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(content) }}. Install: npm install dompurify"
+    );
+  },
+};
+
+// ────────────────────────────────────────────
+// VC064 – Exposed Next.js Server Actions
+// ────────────────────────────────────────────
+
+const exposedServerActions: CustomRule = {
+  id: "VC064",
+  title: "Next.js Server Action Without Auth Check",
+  severity: "high",
+  category: "Authorization",
+  description: "Next.js Server Actions ('use server') are publicly callable endpoints. Without authentication checks, anyone can invoke them directly.",
+  check(content, filePath) {
+    if (!filePath.match(/\.(jsx?|tsx?)$/)) return [];
+    if (!/["']use server["']/i.test(content)) return [];
+    const hasAuth = /getServerSession|auth\(\)|currentUser|getUser|requireAuth|session|clerk|getAuth/i.test(content);
+    if (hasAuth) return [];
+    // Check if there are exported async functions (server actions)
+    if (/export\s+async\s+function/i.test(content)) {
+      return findMatches(content, /export\s+async\s+function\s+\w+/g, exposedServerActions, filePath, () =>
+        "Add authentication to Server Actions: const session = await getServerSession(); if (!session) throw new Error('Unauthorized');"
+      );
+    }
+    return [];
+  },
+};
+
+// ────────────────────────────────────────────
+// VC065 – Unprotected Next.js API Routes
+// ────────────────────────────────────────────
+
+const unprotectedAPIRoutes: CustomRule = {
+  id: "VC065",
+  title: "Unprotected Next.js API Route",
+  severity: "high",
+  category: "Authorization",
+  description: "Next.js API routes under /api/ without authentication middleware can be called by anyone, exposing data or mutations.",
+  check(content, filePath) {
+    if (!filePath.match(/\/api\/.*\.(jsx?|tsx?)$/) && !filePath.match(/\/app\/api\/.*route\.(jsx?|tsx?)$/)) return [];
+    // Skip health/public endpoints
+    if (/health|status|public|webhook/i.test(filePath)) return [];
+    const hasAuth = /getServerSession|auth\(\)|currentUser|getUser|requireAuth|session|clerk|getAuth|verifyToken|authenticate|middleware/i.test(content);
+    if (hasAuth) return [];
+    const hasHandler = /export\s+(?:async\s+)?function\s+(?:GET|POST|PUT|DELETE|PATCH)|export\s+default/i.test(content);
+    if (hasHandler) {
+      return findMatches(content, /export\s+(?:async\s+)?function\s+(?:GET|POST|PUT|DELETE|PATCH)/g, unprotectedAPIRoutes, filePath, () =>
+        "Add authentication to API routes: const session = await getServerSession(authOptions); if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });"
+      );
+    }
+    return [];
+  },
+};
+
+// ────────────────────────────────────────────
+// VC066 – Client Component Using Secrets
+// ────────────────────────────────────────────
+
+const clientComponentSecret: CustomRule = {
+  id: "VC066",
+  title: "Secret Used in Client Component",
+  severity: "critical",
+  category: "Secrets",
+  description: "Using server-side secrets (process.env without NEXT_PUBLIC_) in 'use client' components exposes them in the browser bundle.",
+  check(content, filePath) {
+    if (!filePath.match(/\.(jsx?|tsx?)$/)) return [];
+    if (!/["']use client["']/i.test(content)) return [];
+    // process.env without NEXT_PUBLIC_ prefix in a client component
+    const pattern = /process\.env\.(?!NEXT_PUBLIC_)[A-Z_]{3,}/g;
+    if (pattern.test(content)) {
+      return findMatches(content, /process\.env\.(?!NEXT_PUBLIC_)[A-Z_]{3,}/g, clientComponentSecret, filePath, () =>
+        "Server-side env vars are not available in client components and may leak in builds. Move this logic to a Server Component or API route."
+      );
+    }
+    return [];
+  },
+};
+
+// ────────────────────────────────────────────
+// VC067 – Insecure Deep Link Handling
+// ────────────────────────────────────────────
+
+const insecureDeepLink: CustomRule = {
+  id: "VC067",
+  title: "Insecure Deep Link Handling",
+  severity: "high",
+  category: "Injection",
+  description: "Deep links that navigate or execute actions without validating the URL scheme, host, or parameters can be exploited for phishing or unauthorized actions.",
+  check(content, filePath) {
+    if (!/(?:Linking|DeepLinking|deep.?link|handleURL|openURL|url.?scheme)/i.test(content)) return [];
+    const matches: RuleMatch[] = [];
+    // React Native Linking without validation
+    const patterns = [
+      /Linking\.addEventListener\s*\([^)]*(?:url|link)/gi,
+      /Linking\.getInitialURL\s*\(\)/g,
+      /handleOpenURL|handleDeepLink|onDeepLink/gi,
+    ];
+    const hasValidation = /allowedSchemes|allowedHosts|validateURL|isAllowedURL|whitelist|URL.*hostname.*includes/i.test(content);
+    if (hasValidation) return [];
+    for (const p of patterns) {
+      matches.push(...findMatches(content, p, insecureDeepLink, filePath, () =>
+        "Validate deep link URLs: check the scheme and host against an allowlist before navigating or executing actions."
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC068 – Sensitive Data in AsyncStorage
+// ────────────────────────────────────────────
+
+const sensitiveAsyncStorage: CustomRule = {
+  id: "VC068",
+  title: "Sensitive Data in AsyncStorage",
+  severity: "high",
+  category: "Secrets",
+  description: "React Native AsyncStorage is unencrypted. Storing tokens, passwords, or secrets there makes them readable by other apps or anyone with device access.",
+  check(content, filePath) {
+    if (!/AsyncStorage/i.test(content)) return [];
+    const patterns = [
+      /AsyncStorage\.setItem\s*\(\s*["'`](?:token|access_token|auth_token|jwt|session|refresh_token|api_key|password|secret|private_key)/gi,
+    ];
+    const matches: RuleMatch[] = [];
+    for (const p of patterns) {
+      matches.push(...findMatches(content, p, sensitiveAsyncStorage, filePath, () =>
+        "Use react-native-keychain or expo-secure-store instead of AsyncStorage for sensitive data. These use the OS keychain (encrypted)."
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC069 – Missing Certificate Pinning
+// ────────────────────────────────────────────
+
+const missingCertPinning: CustomRule = {
+  id: "VC069",
+  title: "Missing Certificate Pinning in Mobile App",
+  severity: "medium",
+  category: "Cryptography",
+  description: "Mobile apps without SSL certificate pinning are vulnerable to MITM attacks via compromised or rogue CAs. Pin your API server's certificate.",
+  check(content, filePath) {
+    // Only for mobile project files
+    if (!/(?:react.native|expo|android|ios|mobile)/i.test(filePath) && !/(?:React.*Native|expo)/i.test(content)) return [];
+    if (!/(?:fetch|axios|http|api|request)/i.test(content)) return [];
+    // Check for HTTP client setup without pinning
+    if (/axios\.create|new\s+(?:HttpClient|ApiClient)/i.test(content)) {
+      const hasPinning = /pinning|certificate|cert|ssl|TrustKit|react-native-ssl-pinning|cert-pinner/i.test(content);
+      if (!hasPinning) {
+        return findMatches(content, /axios\.create|new\s+(?:HttpClient|ApiClient)/gi, missingCertPinning, filePath, () =>
+          "Add SSL certificate pinning: use react-native-ssl-pinning or TrustKit. This prevents MITM attacks via rogue certificates."
+        );
+      }
+    }
+    return [];
+  },
+};
+
+// ────────────────────────────────────────────
+// VC070 – Android Debuggable Flag
+// ────────────────────────────────────────────
+
+const androidDebuggable: CustomRule = {
+  id: "VC070",
+  title: "Android App Debuggable in Production",
+  severity: "high",
+  category: "Configuration",
+  description: "android:debuggable='true' in AndroidManifest.xml allows attackers to attach debuggers, inspect memory, and bypass security controls.",
+  check(content, filePath) {
+    if (!filePath.match(/AndroidManifest\.xml$/i)) return [];
+    if (/android:debuggable\s*=\s*["']true["']/i.test(content)) {
+      return findMatches(content, /android:debuggable\s*=\s*["']true["']/gi, androidDebuggable, filePath, () =>
+        "Remove android:debuggable='true' or set it to false. Debug builds should use build variants, not manifest flags."
+      );
+    }
+    return [];
+  },
+};
+
+// ────────────────────────────────────────────
+// VC071 – Django DEBUG=True
+// ────────────────────────────────────────────
+
+const djangoDebug: CustomRule = {
+  id: "VC071",
+  title: "Django DEBUG Mode Enabled",
+  severity: "critical",
+  category: "Configuration",
+  description: "Django with DEBUG=True exposes detailed error pages with source code, database queries, environment variables, and installed apps to anyone.",
+  check(content, filePath) {
+    if (!filePath.match(/settings\.py$/i) && !filePath.match(/config.*\.py$/i)) return [];
+    if (/^\s*DEBUG\s*=\s*True\s*$/m.test(content)) {
+      const hasEnvCheck = /os\.environ|env\(|config\(|getenv/i.test(content);
+      if (!hasEnvCheck) {
+        return findMatches(content, /^\s*DEBUG\s*=\s*True/gm, djangoDebug, filePath, () =>
+          "Use environment variable: DEBUG = os.environ.get('DEBUG', 'False') == 'True'. Never hardcode DEBUG=True."
+        );
+      }
+    }
+    return [];
+  },
+};
+
+// ────────────────────────────────────────────
+// VC072 – Flask Hardcoded Secret Key
+// ────────────────────────────────────────────
+
+const flaskSecretKey: CustomRule = {
+  id: "VC072",
+  title: "Flask Secret Key Hardcoded",
+  severity: "critical",
+  category: "Secrets",
+  description: "Hardcoded Flask secret_key allows attackers to forge sessions, CSRF tokens, and signed cookies. Must be a random value from environment variables.",
+  check(content, filePath) {
+    if (!filePath.match(/\.py$/)) return [];
+    const patterns = [
+      /(?:app\.)?secret_key\s*=\s*["'`][^"'`]{3,}["'`]/g,
+      /(?:app\.config)\s*\[\s*["']SECRET_KEY["']\s*\]\s*=\s*["'`][^"'`]{3,}["'`]/g,
+    ];
+    const hasEnv = /os\.environ|env\(|config\(|getenv/i.test(content);
+    if (hasEnv) return [];
+    const matches: RuleMatch[] = [];
+    for (const p of patterns) {
+      matches.push(...findMatches(content, p, flaskSecretKey, filePath, () =>
+        "Use environment variable: app.secret_key = os.environ['SECRET_KEY']. Generate with: python -c \"import secrets; print(secrets.token_hex(32))\""
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC073 – Pickle Deserialization
+// ────────────────────────────────────────────
+
+const pickleDeserialization: CustomRule = {
+  id: "VC073",
+  title: "Unsafe Pickle Deserialization",
+  severity: "critical",
+  category: "Injection",
+  description: "pickle.loads() on untrusted data allows arbitrary code execution. An attacker can craft a pickle payload that runs system commands on your server.",
+  check(content, filePath) {
+    if (!filePath.match(/\.py$/)) return [];
+    const matches: RuleMatch[] = [];
+    const patterns = [
+      /pickle\.loads?\s*\(/g,
+      /cPickle\.loads?\s*\(/g,
+      /shelve\.open\s*\(/g,
+      /yaml\.load\s*\([^)]*(?!Loader\s*=\s*yaml\.SafeLoader)/g,
+    ];
+    const hasSafe = /restricted_loads|SafeUnpickler|safe_load|yaml\.safe_load/i.test(content);
+    if (hasSafe) return [];
+    for (const p of patterns) {
+      matches.push(...findMatches(content, p, pickleDeserialization, filePath, () =>
+        "Never unpickle untrusted data — it allows arbitrary code execution. Use JSON for data exchange, or yaml.safe_load() for YAML."
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC074 – Missing CSRF Protection (Django)
+// ────────────────────────────────────────────
+
+const missingCSRF: CustomRule = {
+  id: "VC074",
+  title: "CSRF Protection Disabled",
+  severity: "high",
+  category: "Authorization",
+  description: "Using @csrf_exempt on state-changing views (POST/PUT/DELETE) allows attackers to forge requests from other sites, performing actions as authenticated users.",
+  check(content, filePath) {
+    if (!filePath.match(/\.py$/)) return [];
+    const matches: RuleMatch[] = [];
+    if (/csrf_exempt/i.test(content)) {
+      matches.push(...findMatches(content, /@csrf_exempt/g, missingCSRF, filePath, () =>
+        "Remove @csrf_exempt and use proper CSRF tokens. For APIs, use token-based auth (JWT) instead of session cookies."
+      ));
+    }
+    // Also check for CsrfViewMiddleware removal
+    if (/MIDDLEWARE.*=.*\[/s.test(content) && !/CsrfViewMiddleware/i.test(content) && /django/i.test(content)) {
+      matches.push(...findMatches(content, /MIDDLEWARE\s*=/g, missingCSRF, filePath, () =>
+        "Re-add 'django.middleware.csrf.CsrfViewMiddleware' to MIDDLEWARE. CSRF protection is essential for session-based auth."
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC075 – GitHub Actions Script Injection
+// ────────────────────────────────────────────
+
+const githubActionsInjection: CustomRule = {
+  id: "VC075",
+  title: "GitHub Actions Script Injection",
+  severity: "critical",
+  category: "Injection",
+  description: "Using ${{ github.event.* }} directly in 'run:' steps allows attackers to inject shell commands via PR titles, issue bodies, or branch names.",
+  check(content, filePath) {
+    if (!filePath.match(/\.github\/workflows\/.*\.(yml|yaml)$/i)) return [];
+    const matches: RuleMatch[] = [];
+    // Direct interpolation in run steps
+    const patterns = [
+      /run:.*\$\{\{\s*github\.event\.(?:issue|pull_request|comment|review|head_commit)\.(?:title|body|message)/gi,
+      /run:.*\$\{\{\s*github\.event\.(?:inputs|head_ref|base_ref)/gi,
+    ];
+    for (const p of patterns) {
+      matches.push(...findMatches(content, p, githubActionsInjection, filePath, () =>
+        "Never use ${{ github.event.* }} directly in 'run:'. Pass it as an environment variable: env: TITLE: ${{ github.event.issue.title }} then use $TITLE in the script."
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC076 – Secrets in CI Config
+// ────────────────────────────────────────────
+
+const secretsInCI: CustomRule = {
+  id: "VC076",
+  title: "Hardcoded Secrets in CI/CD Config",
+  severity: "critical",
+  category: "Secrets",
+  description: "Hardcoded tokens, passwords, or API keys in CI/CD workflow files are visible to anyone with repo access. Use encrypted secrets instead.",
+  check(content, filePath) {
+    if (!filePath.match(/\.github\/workflows\/|\.gitlab-ci|Jenkinsfile|\.circleci|bitbucket-pipelines/i)) return [];
+    const matches: RuleMatch[] = [];
+    // Hardcoded values that look like secrets (not using ${{ secrets.* }})
+    const patterns = [
+      /(?:password|token|key|secret|api_key|apikey)\s*[:=]\s*["'`][A-Za-z0-9+/=_-]{20,}["'`]/gi,
+      /(?:DOCKER_PASSWORD|NPM_TOKEN|AWS_SECRET_ACCESS_KEY|GH_TOKEN|GITHUB_TOKEN)\s*[:=]\s*["'`][^"'`$]+["'`]/gi,
+    ];
+    for (const p of patterns) {
+      matches.push(...findMatches(content, p, secretsInCI, filePath, () =>
+        "Use repository secrets: ${{ secrets.MY_TOKEN }} (GitHub) or CI/CD variable settings. Never hardcode credentials in workflow files."
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC077 – CORS Wildcard in Serverless Config
+// ────────────────────────────────────────────
+
+const corsServerless: CustomRule = {
+  id: "VC077",
+  title: "CORS Wildcard in Serverless Config",
+  severity: "high",
+  category: "Configuration",
+  description: "Setting Access-Control-Allow-Origin: * in serverless.yml, vercel.json, or similar configs allows any website to make authenticated requests to your API.",
+  check(content, filePath) {
+    if (!filePath.match(/serverless\.(yml|yaml)|vercel\.json|netlify\.toml|amplify\.yml/i)) return [];
+    const matches: RuleMatch[] = [];
+    if (/(?:Access-Control-Allow-Origin|allowOrigin|cors).*['"]\*['"]/i.test(content)) {
+      matches.push(...findMatches(content, /(?:Access-Control-Allow-Origin|allowOrigin|cors).*['"]\*['"]/gi, corsServerless, filePath, () =>
+        "Replace wildcard CORS with specific origins: allowOrigin: ['https://yourdomain.com']. Wildcard allows any site to call your API."
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// VC078 – Kubernetes Privileged Container
+// ────────────────────────────────────────────
+
+const k8sPrivileged: CustomRule = {
+  id: "VC078",
+  title: "Kubernetes Privileged Container",
+  severity: "critical",
+  category: "Configuration",
+  description: "Running containers with privileged: true or as root in Kubernetes gives full host access, making container escapes trivial.",
+  check(content, filePath) {
+    if (!filePath.match(/\.(yaml|yml)$/) || !/(?:kind|apiVersion|container)/i.test(content)) return [];
+    const matches: RuleMatch[] = [];
+    const patterns = [
+      /privileged\s*:\s*true/g,
+      /runAsUser\s*:\s*0\b/g,
+      /runAsNonRoot\s*:\s*false/g,
+      /allowPrivilegeEscalation\s*:\s*true/g,
+    ];
+    for (const p of patterns) {
+      matches.push(...findMatches(content, p, k8sPrivileged, filePath, () =>
+        "Set securityContext: { privileged: false, runAsNonRoot: true, allowPrivilegeEscalation: false }. Never run containers as root in production."
+      ));
+    }
+    return matches;
+  },
+};
+
+// ────────────────────────────────────────────
+// FRAMEWORK DETECTION
+// ────────────────────────────────────────────
+
+export type DetectedFramework = "next.js" | "react" | "react-native" | "express" | "hono" | "fastify" | "django" | "flask" | "electron" | "vue" | "svelte" | "unknown";
+
+export function detectFramework(files: { path: string; content: string }[]): DetectedFramework[] {
+  const frameworks: Set<DetectedFramework> = new Set();
+  for (const { path, content } of files) {
+    if (path.match(/next\.config/i) || /from\s+["']next/i.test(content)) frameworks.add("next.js");
+    if (/from\s+["']react-native/i.test(content) || path.match(/react-native\.config/i)) frameworks.add("react-native");
+    else if (/from\s+["']react/i.test(content) || /import\s+React/i.test(content)) frameworks.add("react");
+    if (/from\s+["']express/i.test(content) || /require\s*\(\s*["']express/i.test(content)) frameworks.add("express");
+    if (/from\s+["']hono/i.test(content)) frameworks.add("hono");
+    if (/from\s+["']fastify/i.test(content)) frameworks.add("fastify");
+    if (/from\s+["']electron/i.test(content) || path.match(/electron/i)) frameworks.add("electron");
+    if (path.match(/settings\.py$/) || /from\s+django/i.test(content)) frameworks.add("django");
+    if (/from\s+flask/i.test(content) || /Flask\s*\(/i.test(content)) frameworks.add("flask");
+    if (/from\s+["']vue/i.test(content) || path.match(/vue\.config/i)) frameworks.add("vue");
+    if (/from\s+["']svelte/i.test(content) || path.match(/svelte\.config/i)) frameworks.add("svelte");
+  }
+  if (frameworks.size === 0) frameworks.add("unknown");
+  return [...frameworks];
+}
+
+// ────────────────────────────────────────────
+// SEVERITY GRADING
+// ────────────────────────────────────────────
+
+export type SecurityGrade = "A+" | "A" | "B" | "C" | "D" | "F";
+
+export interface GradeResult {
+  grade: SecurityGrade;
+  score: number;
+  summary: string;
+}
+
+export function calculateGrade(findings: Finding[], totalFiles: number): GradeResult {
+  if (findings.length === 0) {
+    return { grade: "A+", score: 100, summary: "No security issues detected. Excellent!" };
+  }
+
+  // Weight by severity
+  let deductions = 0;
+  for (const f of findings) {
+    switch (f.severity) {
+      case "critical": deductions += 15; break;
+      case "high": deductions += 8; break;
+      case "medium": deductions += 4; break;
+      case "low": deductions += 1; break;
+    }
+  }
+
+  // Scale relative to project size (larger projects get a slight buffer)
+  const sizeBuffer = Math.min(Math.log2(Math.max(totalFiles, 1)) * 2, 15);
+  const score = Math.max(0, Math.min(100, 100 - deductions + sizeBuffer));
+
+  let grade: SecurityGrade;
+  let summary: string;
+
+  if (score >= 95) { grade = "A+"; summary = "Excellent security posture with minimal issues."; }
+  else if (score >= 85) { grade = "A"; summary = "Strong security with a few minor concerns."; }
+  else if (score >= 70) { grade = "B"; summary = "Good security but some issues need attention."; }
+  else if (score >= 55) { grade = "C"; summary = "Fair security — several vulnerabilities should be fixed."; }
+  else if (score >= 35) { grade = "D"; summary = "Poor security — critical issues require immediate attention."; }
+  else { grade = "F"; summary = "Failing — serious vulnerabilities present. Fix critical issues immediately."; }
+
+  return { grade, score: Math.round(score), summary };
+}
+
+// ────────────────────────────────────────────
 // EXPORT ALL RULES
 // ────────────────────────────────────────────
 
@@ -1950,6 +2433,22 @@ export const allRules: CustomRule[] = [
   weakHashing,
   disabledTLSVerification,
   hardcodedEncryptionKey,
+  dangerousInnerHTML,
+  exposedServerActions,
+  unprotectedAPIRoutes,
+  clientComponentSecret,
+  insecureDeepLink,
+  sensitiveAsyncStorage,
+  missingCertPinning,
+  androidDebuggable,
+  djangoDebug,
+  flaskSecretKey,
+  pickleDeserialization,
+  missingCSRF,
+  githubActionsInjection,
+  secretsInCI,
+  corsServerless,
+  k8sPrivileged,
 ];
 
 export function runCustomRules(

@@ -1,6 +1,7 @@
 import chalk from "chalk";
 import Table from "cli-table3";
 import type { Finding, ScanResult, Severity } from "../types.js";
+import { calculateGrade, detectFramework, type SecurityGrade } from "../scanners/custom-rules.js";
 
 const SEVERITY_COLORS: Record<Severity, (text: string) => string> = {
   critical: chalk.bgRed.white.bold,
@@ -26,13 +27,36 @@ const SEVERITY_ORDER: Record<Severity, number> = {
   info: 4,
 };
 
-export function renderTerminalReport(result: ScanResult): void {
+const GRADE_COLORS: Record<SecurityGrade, (text: string) => string> = {
+  "A+": chalk.green.bold,
+  "A": chalk.green.bold,
+  "B": chalk.cyan.bold,
+  "C": chalk.yellow.bold,
+  "D": chalk.red.bold,
+  "F": chalk.bgRed.white.bold,
+};
+
+export function renderTerminalReport(result: ScanResult, files?: { path: string; content: string }[]): void {
   const { findings, filesScanned, duration } = result;
 
   // Header
   console.log("");
   console.log(chalk.bold.cyan("  vibecheck") + chalk.gray(" — security scan results"));
   console.log(chalk.gray("  " + "─".repeat(50)));
+  console.log("");
+
+  // Framework detection
+  if (files && files.length > 0) {
+    const frameworks = detectFramework(files);
+    if (frameworks.length > 0 && frameworks[0] !== "unknown") {
+      console.log(chalk.gray("  Frameworks: ") + chalk.white(frameworks.join(", ")));
+    }
+  }
+
+  // Grade
+  const { grade, score, summary } = calculateGrade(findings, filesScanned);
+  const gradeColor = GRADE_COLORS[grade];
+  console.log(chalk.gray("  Security Grade: ") + gradeColor(` ${grade} `) + chalk.gray(` (${score}/100) — ${summary}`));
   console.log("");
 
   if (findings.length === 0) {

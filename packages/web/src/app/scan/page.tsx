@@ -17,6 +17,11 @@ interface ScanResults {
   highCount: number;
   mediumCount: number;
   lowCount: number;
+  grade?: string;
+  score?: number;
+  gradeSummary?: string;
+  frameworks?: string[];
+  totalRules?: number;
 }
 
 const SOURCE_EXTENSIONS = new Set([
@@ -228,12 +233,14 @@ export default function ScanPage() {
     const lines: string[] = [
       "# VibeCheck Security Report",
       "",
+      r.grade ? `- **Security Grade:** ${r.grade} (${r.score}/100)` : "",
+      r.frameworks && r.frameworks.length > 0 ? `- **Frameworks:** ${r.frameworks.join(", ")}` : "",
       `- **Files Scanned:** ${r.filesScanned}`,
       `- **Total Findings:** ${r.findings.length}`,
       `- **Critical:** ${r.criticalCount} | **High:** ${r.highCount} | **Medium:** ${r.mediumCount}`,
       `- **Scan Duration:** ${(r.duration / 1000).toFixed(1)}s`,
       "",
-    ];
+    ].filter(Boolean);
 
     const sorted = [...r.findings].sort((a, b) => {
       const order: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
@@ -365,6 +372,46 @@ export default function ScanPage() {
       {/* Results */}
       {state === "results" && results && (
         <div className="space-y-6">
+          {/* Grade banner */}
+          {results.grade && (
+            <div className={`rounded-xl p-6 flex items-center gap-6 ${
+              results.grade === "A+" || results.grade === "A" ? "bg-green-900/20 border border-green-800" :
+              results.grade === "B" ? "bg-cyan-900/20 border border-cyan-800" :
+              results.grade === "C" ? "bg-yellow-900/20 border border-yellow-800" :
+              "bg-red-900/20 border border-red-800"
+            }`}>
+              <div className={`text-5xl font-black ${
+                results.grade === "A+" || results.grade === "A" ? "text-green-400" :
+                results.grade === "B" ? "text-cyan-400" :
+                results.grade === "C" ? "text-yellow-400" :
+                "text-red-400"
+              }`}>
+                {results.grade}
+              </div>
+              <div className="flex-1">
+                <div className="flex items-center gap-3 mb-1">
+                  <span className="text-lg font-semibold">Security Grade</span>
+                  <span className="text-gray-500 text-sm">{results.score}/100</span>
+                </div>
+                <p className="text-gray-400 text-sm">{results.gradeSummary}</p>
+                {results.frameworks && results.frameworks.length > 0 && (
+                  <div className="flex gap-2 mt-2">
+                    {results.frameworks.map((fw) => (
+                      <span key={fw} className="px-2 py-0.5 bg-gray-700/50 rounded text-xs text-gray-300">
+                        {fw}
+                      </span>
+                    ))}
+                    {results.totalRules && (
+                      <span className="px-2 py-0.5 bg-gray-700/50 rounded text-xs text-gray-300">
+                        {results.totalRules} rules
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Summary stats */}
           <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
             <StatCard
@@ -479,7 +526,7 @@ export default function ScanPage() {
             </div>
             <div>
               <div className="text-cyan-400 font-medium mb-1">2. Scan</div>
-              <p>Our engine runs 62 security rules checking for hardcoded secrets, SQL injection, XSS, SSRF, NoSQL injection, weak crypto, Electron misconfigs, Docker security, and more.</p>
+              <p>Our engine runs 78 security rules checking for hardcoded secrets, SQL injection, XSS, SSRF, NoSQL injection, weak crypto, Electron misconfigs, Docker/K8s security, CI/CD vulnerabilities, and more.</p>
             </div>
             <div>
               <div className="text-cyan-400 font-medium mb-1">3. Fix</div>

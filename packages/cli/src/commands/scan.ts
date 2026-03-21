@@ -188,6 +188,11 @@ export async function scanCommand(
     directory: dir,
   };
 
+  // Collect file contents for framework detection
+  const fileContents = files
+    .map((path) => ({ path, content: readFileContents(dir, path) ?? "" }))
+    .filter((f) => f.content.length > 0);
+
   switch (format) {
     case "json":
       renderJsonReport(result);
@@ -196,7 +201,7 @@ export async function scanCommand(
       renderSarifReport(result);
       break;
     default:
-      renderTerminalReport(result);
+      renderTerminalReport(result, fileContents);
       break;
   }
 
